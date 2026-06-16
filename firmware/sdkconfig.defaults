@@ -1,0 +1,40 @@
+#
+# sdkconfig.defaults — Focus Pager Phase 1
+# Applied on top of ESP-IDF defaults when you run: idf.py set-target esp32
+#
+# To regenerate sdkconfig from these defaults:  idf.py set-target esp32
+# To open menuconfig:                           idf.py menuconfig
+#
+
+# ── Bluetooth ────────────────────────────────────────────────────────────────
+# Phase 1: BLE only.  Phase 4 (HFP) needs BT_CLASSIC_ENABLED + BT_HFP_ENABLE.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=y
+CONFIG_BT_BLE_ENABLED=y
+CONFIG_BT_CLASSIC_ENABLED=n
+
+# GATT client (we discover ANCS on the iPhone)
+CONFIG_BT_GATTC_ENABLE=y
+
+# Security / bonding (iOS requires bonding for ANCS)
+CONFIG_BT_BLE_SMP_ENABLE=y
+CONFIG_BT_SMP_ENABLE=y
+
+# Increase GATT table size for ANCS characteristics
+CONFIG_BT_GATT_MAX_SR_PROFILES=8
+CONFIG_BT_GATT_MAX_SR_ATTRIBUTES=64
+
+# ── Flash / NVS ──────────────────────────────────────────────────────────────
+CONFIG_NVS_ENCRYPTION=n
+
+# ── Logging ──────────────────────────────────────────────────────────────────
+# Set to INFO for production; DEBUG shows raw GATT bytes.
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_MAXIMUM_LEVEL_DEBUG=y
+
+# ── FreeRTOS ─────────────────────────────────────────────────────────────────
+CONFIG_FREERTOS_HZ=1000
+
+# ── Serial ───────────────────────────────────────────────────────────────────
+# 921600 baud so UART output keeps up with BT log volume
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
