@@ -149,6 +149,10 @@ static void build_attr_db(void)
         .len = ESP_UUID_LEN_16,
         .uuid.uuid16 = ESP_GATT_UUID_CHAR_CLIENT_CONFIG,
     };
+    /* Must have static storage: the attribute table is read by
+     * esp_ble_gatts_create_attr_tab() after this function returns, so a
+     * compound-literal/stack value here would dangle. */
+    static const uint16_t primary_service_uuid = ESP_GATT_UUID_PRI_SERVICE;
 
     svc_uuid = make_uuid(XX_SVC);
     bs_uuid  = make_uuid(XX_BRICK_STATE);
@@ -161,11 +165,11 @@ static void build_attr_db(void)
         .attr_control = {.auto_rsp = ESP_GATT_AUTO_RSP},
         .att_desc = {
             .uuid_length = ESP_UUID_LEN_16,
-            .uuid_p      = (uint8_t *)&(uint16_t){ESP_GATT_UUID_PRI_SERVICE},
+            .uuid_p      = (uint8_t *)&primary_service_uuid,
             .perm        = ESP_GATT_PERM_READ,
-            .max_length  = sizeof(svc_uuid),
-            .length      = sizeof(svc_uuid),
-            .value       = (uint8_t *)&svc_uuid,
+            .max_length  = ESP_UUID_LEN_128,
+            .length      = ESP_UUID_LEN_128,
+            .value       = svc_uuid.uuid.uuid128,
         },
     };
 
