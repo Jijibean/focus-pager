@@ -4,3 +4,7 @@ firmware/dependencies.lock
 *.pyc
 __pycache__/
 .DS_Store
+
+# Xcode per-user state
+xcuserdata/
+*.xcuserstate
