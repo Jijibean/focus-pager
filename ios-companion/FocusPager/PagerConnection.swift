@@ -328,10 +328,10 @@ extension PagerConnection: CBPeripheralDelegate {
             logEvent("Brick Control service not found")
             return
         }
-        peripheral.discoverCharacteristics(
-            [BrickGATT.brickState, BrickGATT.unbrickEvent, BrickGATT.auth, BrickGATT.command],
-            for: service
-        )
+        // Discover all characteristics and filter locally. Naming specific
+        // UUIDs can fail with CBError code 8 ("UUID not allowed") when iOS is
+        // serving a stale GATT cache whose layout no longer matches.
+        peripheral.discoverCharacteristics(nil, for: service)
     }
 
     func peripheral(_ peripheral: CBPeripheral,
