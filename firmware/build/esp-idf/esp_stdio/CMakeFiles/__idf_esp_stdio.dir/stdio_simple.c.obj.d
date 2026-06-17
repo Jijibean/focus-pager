@@ -1,0 +1,21 @@
+esp-idf/esp_stdio/CMakeFiles/__idf_esp_stdio.dir/stdio_simple.c.obj: \
+ /Users/evanji/esp/esp-idf/components/esp_stdio/stdio_simple.c \
+ /Users/evanji/esp/esp-idf/components/esp_stdio/include/esp_system_console.h \
+ /Users/evanji/esp/esp-idf/components/esp_rom/include/esp_rom_serial_output.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/stdint.h \
+ /Users/evanji/esp/esp-idf/components/esp_libc/platform_include/sys/cdefs.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/cdefs.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/config.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/ieeefp.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/features.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/picolibc.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/float.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/_default_types.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stddef.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_intsup.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_stdint.h \
+ /Users/evanji/esp/esp-idf/components/esp_rom/include/esp_rom_usb_serial.h \
+ /Users/evanji/esp/esp-idf/components/esp_rom/esp32/esp_rom_caps.h \
+ /Users/evanji/focus-pager/firmware/build/config/esp/console/secondary/usb/serial/jtag.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/libc/picolibc/newlib/compatibility.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/libc/picolibc.cdep

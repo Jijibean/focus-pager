@@ -1,0 +1,165 @@
+Command: /Users/evanji/.espressif/python_env/idf6.2_py3.11_env/bin/python /Users/evanji/esp/esp-idf/tools/idf_monitor.py -p /dev/cu.usbserial-0001 -b 115200 --toolchain-prefix xtensa-esp32-elf- --target esp32 --revision 0 /Users/evanji/focus-pager/firmware/build/focus_pager_phase1.elf /Users/evanji/focus-pager/firmware/build/bootloader/bootloader.elf -m '/Users/evanji/.espressif/python_env/idf6.2_py3.11_env/bin/python' '/Users/evanji/esp/esp-idf/tools/idf.py' '-p' '/dev/cu.usbserial-0001'
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0040,len:6292
+load:0x40078000,len:15820
+load:0x40080400,len:3988
+entry 0x40080644
+[0;32mI (27) boot: ESP-IDF v6.1-dev-5572-g4288cd3334 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Jun 17 2026 14:51:09[0m
+[0;32mI (28) boot: Multicore bootloader[0m
+[0;32mI (30) boot: chip revision: v3.1[0m
+[0;32mI (33) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (37) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (40) boot.esp32: SPI Flash Size : 2MB[0m
+[0;32mI (44) boot: Enabling RNG early entropy source...[0m
+[0;32mI (49) boot: Partition Table:[0m
+[0;32mI (51) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (57) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (64) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (71) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (77) boot: End of partition table[0m
+[0;32mI (80) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=2d4d4h (185556) map[0m
+[0;32mI (154) esp_image: segment 1: paddr=0003d4fc vaddr=3ffbdb60 size=02b1ch ( 11036) load[0m
+[0;32mI (159) esp_image: segment 2: paddr=00040020 vaddr=400d0020 size=774a0h (488608) map[0m
+[0;32mI (333) esp_image: segment 3: paddr=000b74c8 vaddr=3ffc067c size=027b0h ( 10160) load[0m
+[0;32mI (337) esp_image: segment 4: paddr=000b9c80 vaddr=40080000 size=186d8h (100056) load[0m
+[0;32mI (378) esp_image: segment 5: paddr=000d2360 vaddr=50000000 size=00028h (    40) load[0m
+[0;32mI (391) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (391) boot: Disabling RNG early entropy source...[0m
+[0;32mI (401) cpu_start: Multicore app[0m
+[0;32mI (410) cpu_start: GPIO 3 and 1 are used as console UART I/O pins[0m
+[0;32mI (410) cpu_start: Pro cpu start user code[0m
+[0;32mI (410) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (412) app_init: Application information:[0m
+[0;32mI (416) app_init: Project name:     focus_pager_phase1[0m
+[0;32mI (421) app_init: App version:      e095030-dirty[0m
+[0;32mI (425) app_init: Compile time:     Jun 17 2026 15:34:00[0m
+[0;32mI (430) app_init: ELF file SHA256:  33ffe8074...[0m
+[0;32mI (434) app_init: ESP-IDF:          v6.1-dev-5572-g4288cd3334[0m
+[0;32mI (440) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (444) efuse_init: Max chip rev:     v3.99 [0m
+[0;32mI (448) efuse_init: Chip rev:         v3.1[0m
+[0;32mI (452) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (458) heap_init: At 3FFAFF10 len 000000F0 (0 KiB): DRAM[0m
+[0;32mI (463) heap_init: At 3FFB6388 len 00001C78 (7 KiB): DRAM[0m
+[0;32mI (468) heap_init: At 3FFB9A20 len 00004108 (16 KiB): DRAM[0m
+[0;32mI (473) heap_init: At 3FFC92F8 len 00016D08 (91 KiB): DRAM[0m
+[0;32mI (478) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (484) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (489) heap_init: At 400986D8 len 00007928 (30 KiB): IRAM[0m
+[0;32mI (496) spi_flash: detected chip: generic[0m
+[0;32mI (498) spi_flash: flash io: dio[0m
+[0;33mW (501) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (515) coexist: coex firmware version: 789e098[0m
+[0;32mI (519) main_task: Started on CPU0[0m
+[0;32mI (521) main_task: Calling app_main()[0m
+[0;32mI (538) BTDM_INIT: BT controller compile version [e02a38e][0m
+[0;32mI (540) BTDM_INIT: Using main XTAL as clock source[0m
+[0;32mI (541) BTDM_INIT: Bluetooth MAC: 30:76:f5:93:a8:6e[0m
+[0;32mI (545) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06[0m
+[0;32mI (974) MAIN: Bluetooth stack up — initialising ANCS client[0m
+[0;32mI (975) ANCS: GATTC registered, if=3 status=0[0m
+[0;32mI (976) ANCS: ANCS client initialised[0m
+[0;32mI (978) MAIN: Focus Pager Phase 1 running — open iPhone Bluetooth settings[0m
+[0;32mI (982) ANCS: ADV_DATA_RAW_SET status=0 — setting scan response[0m
+[0;32mI (990) MAIN: and pair with 'FocusPager'. Send yourself a notification.[0m
+[0;32mI (993) ANCS: SCAN_RSP_DATA_RAW_SET status=0 — starting advertising[0m
+[0;32mI (1021) ANCS: ADV_START_COMPLETE — advertising is live[0m
+[0;32mI (1141) UI: ST7789 initialised (240x320)[0m
+[0;32mI (1142) MAIN: Display test: RED[0m
+[0;32mI (2178) MAIN: Display test: GREEN[0m
+[0;32mI (3214) MAIN: Display test: BLUE[0m
+[0;32mI (4295) MAIN: heartbeat #0 — waiting for notifications[0m
+[0;32mI (7295) MAIN: heartbeat #1 — waiting for notifications[0m
+[0;32mI (10295) MAIN: heartbeat #2 — waiting for notifications[0m
+[0;32mI (13295) MAIN: heartbeat #3 — waiting for notifications[0m
+[0;32mI (16295) MAIN: heartbeat #4 — waiting for notifications[0m
+[0;32mI (19295) MAIN: heartbeat #5 — waiting for notifications[0m
+[0;32mI (22295) MAIN: heartbeat #6 — waiting for notifications[0m
+[0;32mI (25295) MAIN: heartbeat #7 — waiting for notifications[0m
+[0;32mI (28295) MAIN: heartbeat #8 — waiting for notifications[0m
+[0;32mI (31295) MAIN: heartbeat #9 — waiting for notifications[0m
+[0;32mI (34295) MAIN: heartbeat #10 — waiting for notifications[0m
+[0;32mI (36322) ANCS: Connected, conn_id=0[0m
+[0;32mI (37295) MAIN: heartbeat #11 — waiting for notifications[0m
+[0;33mW (38266) BT_SMP: FOR LE SC LTK IS USED INSTEAD OF STK[0m
+[0;32mI (38553) ANCS: Bonded with 58:a2:15:1e:d7:6a[0m
+[0;32mI (39402) ANCS: Starting service discovery (conn=0 if=3)[0m
+[0;32mI (40295) MAIN: heartbeat #12 — waiting for notifications[0m
+[0;32mI (43295) MAIN: heartbeat #13 — waiting for notifications[0m
+[0;32mI (46295) MAIN: heartbeat #14 — waiting for notifications[0m
+[0;32mI (49295) MAIN: heartbeat #15 — waiting for notifications[0m
+[0;32mI (52295) MAIN: heartbeat #16 — waiting for notifications[0m
+[0;32mI (55295) MAIN: heartbeat #17 — waiting for notifications[0m
+[0;32mI (58295) MAIN: heartbeat #18 — waiting for notifications[0m
+[0;32mI (61295) MAIN: heartbeat #19 — waiting for notifications[0m
+[0;32mI (64295) MAIN: heartbeat #20 — waiting for notifications[0m
+[0;32mI (67295) MAIN: heartbeat #21 — waiting for notifications[0m
+[0;32mI (70295) MAIN: heartbeat #22 — waiting for notifications[0m
+[0;32mI (73295) MAIN: heartbeat #23 — waiting for notifications[0m
+[0;32mI (76295) MAIN: heartbeat #24 — waiting for notifications[0m
+[0;32mI (79295) MAIN: heartbeat #25 — waiting for notifications[0m
+[0;32mI (82295) MAIN: heartbeat #26 — waiting for notifications[0m
+[0;32mI (85295) MAIN: heartbeat #27 — waiting for notifications[0m
+[0;32mI (88295) MAIN: heartbeat #28 — waiting for notifications[0m
+[0;32mI (91295) MAIN: heartbeat #29 — waiting for notifications[0m
+[0;32mI (94295) MAIN: heartbeat #30 — waiting for notifications[0m
+[0;32mI (97295) MAIN: heartbeat #31 — waiting for notifications[0m
+[0;32mI (100295) MAIN: heartbeat #32 — waiting for notifications[0m
+[0;32mI (103295) MAIN: heartbeat #33 — waiting for notifications[0m
+[0;32mI (106295) MAIN: heartbeat #34 — waiting for notifications[0m
+[0;32mI (109295) MAIN: heartbeat #35 — waiting for notifications[0m
+[0;32mI (112295) MAIN: heartbeat #36 — waiting for notifications[0m
+[0;32mI (115295) MAIN: heartbeat #37 — waiting for notifications[0m
+[0;32mI (118295) MAIN: heartbeat #38 — waiting for notifications[0m
+[0;32mI (121295) MAIN: heartbeat #39 — waiting for notifications[0m
+[0;32mI (124295) MAIN: heartbeat #40 — waiting for notifications[0m
+[0;32mI (127295) MAIN: heartbeat #41 — waiting for notifications[0m
+[0;32mI (130295) MAIN: heartbeat #42 — waiting for notifications[0m
+[0;32mI (133295) MAIN: heartbeat #43 — waiting for notifications[0m
+[0;32mI (136295) MAIN: heartbeat #44 — waiting for notifications[0m
+[0;32mI (139295) MAIN: heartbeat #45 — waiting for notifications[0m
+[0;32mI (142295) MAIN: heartbeat #46 — waiting for notifications[0m
+[0;32mI (145295) MAIN: heartbeat #47 — waiting for notifications[0m
+[0;32mI (148295) MAIN: heartbeat #48 — waiting for notifications[0m
+[0;32mI (151295) MAIN: heartbeat #49 — waiting for notifications[0m
+[0;32mI (154295) MAIN: heartbeat #50 — waiting for notifications[0m
+[0;32mI (157295) MAIN: heartbeat #51 — waiting for notifications[0m
+[0;32mI (160295) MAIN: heartbeat #52 — waiting for notifications[0m
+[0;32mI (163295) MAIN: heartbeat #53 — waiting for notifications[0m
+[0;32mI (166295) MAIN: heartbeat #54 — waiting for notifications[0m
+[0;32mI (169295) MAIN: heartbeat #55 — waiting for notifications[0m
+[0;32mI (172295) MAIN: heartbeat #56 — waiting for notifications[0m
+[0;32mI (175295) MAIN: heartbeat #57 — waiting for notifications[0m
+[0;32mI (178295) MAIN: heartbeat #58 — waiting for notifications[0m
+[0;32mI (181295) MAIN: heartbeat #59 — waiting for notifications[0m
+[0;32mI (184295) MAIN: heartbeat #60 — waiting for notifications[0m
+[0;32mI (187295) MAIN: heartbeat #61 — waiting for notifications[0m
+[0;32mI (190295) MAIN: heartbeat #62 — waiting for notifications[0m
+[0;32mI (193295) MAIN: heartbeat #63 — waiting for notifications[0m
+[0;32mI (196295) MAIN: heartbeat #64 — waiting for notifications[0m
+[0;32mI (199295) MAIN: heartbeat #65 — waiting for notifications[0m
+[0;32mI (202295) MAIN: heartbeat #66 — waiting for notifications[0m
+[0;32mI (205295) MAIN: heartbeat #67 — waiting for notifications[0m
+[0;32mI (208295) MAIN: heartbeat #68 — waiting for notifications[0m
+[0;32mI (211295) MAIN: heartbeat #69 — waiting for notifications[0m
+[0;32mI (214295) MAIN: heartbeat #70 — waiting for notifications[0m
+[0;32mI (217295) MAIN: heartbeat #71 — waiting for notifications[0m
+[0;32mI (220295) MAIN: heartbeat #72 — waiting for notifications[0m
+[0;32mI (223295) MAIN: heartbeat #73 — waiting for notifications[0m
+[0;33mW (223763) BT_APPL: gattc_conn_cb: if=3 st=0 id=3 rsn=0x13[0m
+[0;33mW (223765) BT_HCI: hcif disc complete: hdl 0x0, rsn 0x13 dev_find 1[0m
+[0;33mW (223766) ANCS: Disconnected (reason=19) — restarting advertising[0m
+[0;32mI (223822) ANCS: ADV_DATA_RAW_SET status=0 — setting scan response[0m
+[0;32mI (223827) ANCS: SCAN_RSP_DATA_RAW_SET status=0 — starting advertising[0m
+[0;32mI (223846) ANCS: ADV_START_COMPLETE — advertising is live[0m
+[0;32mI (226295) MAIN: heartbeat #74 — waiting for notifications[0m
+[0;32mI (229295) MAIN: heartbeat #75 — waiting for notifications[0m
+[0;32mI (232295) MAIN: heartbeat #76 — waiting for notifications[0m
+[0;32mI (235295) MAIN: heartbeat #77 — waiting for notifications[0m
+[0;32mI (238295) MAIN: heartbeat #78 — waiting for notifications[0m

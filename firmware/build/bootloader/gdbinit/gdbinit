@@ -1,0 +1,2 @@
+source /Users/evanji/focus-pager/firmware/build/bootloader/gdbinit/symbols
+source /Users/evanji/focus-pager/firmware/build/bootloader/gdbinit/connect

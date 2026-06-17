@@ -1,0 +1,21 @@
+esp-idf/hal/CMakeFiles/__idf_hal.dir/color_hal.c.obj: \
+ /Users/evanji/esp/esp-idf/components/hal/color_hal.c \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stdbool.h \
+ /Users/evanji/esp/esp-idf/components/hal/include/hal/color_hal.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/stdint.h \
+ /Users/evanji/esp/esp-idf/components/esp_libc/platform_include/sys/cdefs.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/cdefs.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/config.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/ieeefp.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/features.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/picolibc.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/float.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/_default_types.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stddef.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_intsup.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_stdint.h \
+ /Users/evanji/esp/esp-idf/components/hal/include/hal/color_types.h \
+ /Users/evanji/esp/esp-idf/components/hal/platform_port/include/hal/assert.h \
+ /Users/evanji/focus-pager/firmware/build/config/libc/picolibc/newlib/compatibility.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/libc/picolibc.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/hal/default/assertion/level.cdep

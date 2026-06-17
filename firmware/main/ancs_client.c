@@ -9,6 +9,7 @@
  */
 
 #include "ancs_client.h"
+#include "ui.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -22,6 +23,7 @@
 #include "esp_gattc_api.h"
 #include "esp_gatt_defs.h"
 #include "esp_bt_defs.h"
+#include "esp_timer.h"
 
 #define TAG "ANCS"
 
@@ -60,28 +62,29 @@ static const uint8_t ANCS_DATA_SRC_UUID[16] = {
 /* ── GATT client app ID ─────────────────────────────────────────────────── */
 #define ANCS_GATTC_APP_ID         0
 
-/* ── BLE advertising payload ─────────────────────────────────────────────
+/* ── BLE advertising payload (raw) ──────────────────────────────────────────
  *
- *  We include the ANCS service UUID as a "solicited 128-bit UUID" so iOS
- *  recognises us as an ANCS-capable accessory and initiates connection.
+ *  iOS requires AD type 0x15 (128-bit Service Solicitation UUID) to recognise
+ *  an ANCS accessory. The esp_ble_adv_data_t helper only emits AD type 0x07
+ *  (Service UUID), which iOS ignores for ANCS. We must use raw adv data.
+ *
+ *  Adv packet  (21 bytes):
+ *    [02 01 06]           Flags: LE General Discoverable, no BR/EDR
+ *    [11 15 <16-byte UUID>] 128-bit Service Solicitation UUID (ANCS)
+ *
+ *  Scan response (12 bytes):
+ *    [0B 09 FocusPager]   Complete Local Name
  */
-static uint8_t adv_service_uuid128[16];   /* filled from ANCS_SVC_UUID at init */
+static uint8_t raw_adv_data[] = {
+    0x02, 0x01, 0x06,           /* Flags */
+    0x11, 0x15,                 /* Length=17, AD type=0x15 (Solicitation UUID) */
+    0xD0, 0x00, 0x2D, 0x12, 0x1E, 0x4B, 0x0F, 0xA4,  /* ANCS UUID, LE */
+    0x99, 0x4E, 0xCE, 0xB5, 0x31, 0xF4, 0x05, 0x79,
+};
 
-static esp_ble_adv_data_t adv_data = {
-    .set_scan_rsp        = false,
-    .include_name        = true,
-    .include_txpower     = false,
-    .min_interval        = 0x0006,
-    .max_interval        = 0x0010,
-    .appearance          = 0x00,
-    .manufacturer_len    = 0,
-    .p_manufacturer_data = NULL,
-    .service_data_len    = 0,
-    .p_service_data      = NULL,
-    /* Solicitation: tell iOS we want ANCS */
-    .service_uuid_len    = sizeof(adv_service_uuid128),
-    .p_service_uuid      = adv_service_uuid128,
-    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT),
+static uint8_t raw_scan_rsp_data[] = {
+    0x0B, 0x09,                 /* Length=11, AD type=0x09 (Complete Local Name) */
+    'F','o','c','u','s','P','a','g','e','r',
 };
 
 static esp_ble_adv_params_t adv_params = {
@@ -125,7 +128,39 @@ static bool s_fetch_pending = false;
 /* Remote device BDA stored at connect time (used in subsequent GATT calls) */
 static esp_bd_addr_t s_remote_bda = {0};
 
+/* Timer used to fire service discovery outside the BT callback context */
+static esp_timer_handle_t s_discovery_timer = NULL;
+
+/* Count of services seen during discovery (shown on screen for debugging) */
+static int s_svc_count = 0;
+
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
+
+/* Called by timer — safe to call GATTC from here */
+static void discovery_timer_cb(void *arg)
+{
+    ESP_LOGI(TAG, "Starting service discovery (conn=%d if=%d)", s_conn_id, s_gattc_if);
+    s_svc_count = 0;
+    esp_err_t err = esp_ble_gattc_search_service(s_gattc_if, s_conn_id, NULL);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "search_service failed: %s", esp_err_to_name(err));
+        ui_show_status("Search failed\nDisconnecting...");
+        esp_ble_gap_disconnect(s_remote_bda);
+    }
+}
+
+static void start_discovery_delayed(void)
+{
+    if (s_discovery_timer == NULL) {
+        esp_timer_create_args_t args = {
+            .callback = discovery_timer_cb,
+            .name     = "ancs_disc",
+        };
+        esp_timer_create(&args, &s_discovery_timer);
+    }
+    esp_timer_stop(s_discovery_timer);               /* cancel any pending */
+    esp_timer_start_once(s_discovery_timer, 800000); /* 800 ms */
+}
 
 static bool uuid128_match(const uint8_t *a, const uint8_t *b)
 {
@@ -189,7 +224,7 @@ static void fetch_notif_attributes(uint32_t uid)
         s_ctrl_pt_handle,
         sizeof(cmd), cmd,
         ESP_GATT_WRITE_TYPE_RSP,
-        ESP_GATT_AUTH_REQ_NONE);
+        ESP_GATT_AUTH_REQ_NONE);  /* link already encrypted from bonding */
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "Control Point write failed: %s", esp_err_to_name(ret));
     }
@@ -269,18 +304,31 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         s_conn_id = param->connect.conn_id;
         s_disc_state = DISC_IDLE;
         memcpy(s_remote_bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
-        /* Kick off bonding / service discovery */
-        esp_ble_set_encryption(param->connect.remote_bda,
-                               ESP_BLE_SEC_ENCRYPT_MITM);
+        ui_show_status("Opening GATTC...");
+        /* Must open the GATTC client channel before service discovery.
+         * Without this, search_service fires into a void and SEARCH_CMPL
+         * never arrives. is_direct=true reuses the existing BLE link. */
+        esp_ble_gattc_open(gattc_if, param->connect.remote_bda,
+                           param->connect.ble_addr_type, true);
         break;
 
     case ESP_GATTC_OPEN_EVT:
         if (param->open.status != ESP_GATT_OK) {
-            ESP_LOGE(TAG, "Open failed: %d", param->open.status);
+            ESP_LOGE(TAG, "GATTC open failed: %d", param->open.status);
+            ui_show_status("GATTC open failed\nRetrying...");
+            esp_ble_gap_disconnect(s_remote_bda);
+        } else {
+            ESP_LOGI(TAG, "GATTC open OK — requesting encryption");
+            ui_show_status("Bonding...");
+            esp_ble_set_encryption(param->open.remote_bda,
+                                   ESP_BLE_SEC_ENCRYPT_MITM);
         }
         break;
 
     case ESP_GATTC_SEARCH_RES_EVT: {
+        s_svc_count++;
+        ESP_LOGI(TAG, "Service #%d found (uuid_len=%d)", s_svc_count,
+                 param->search_res.srvc_id.uuid.len);
         /* Check if this is the ANCS service */
         esp_gatt_id_t *srvc = &param->search_res.srvc_id;
         if (srvc->uuid.len == ESP_UUID_LEN_128 &&
@@ -291,19 +339,19 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                      param->search_res.end_handle);
 
             s_notif_src_handle = find_char_handle(
-                gattc_if, param->connect.conn_id,
+                gattc_if, s_conn_id,
                 param->search_res.start_handle,
                 param->search_res.end_handle,
                 ANCS_NOTIF_SRC_UUID);
 
             s_ctrl_pt_handle = find_char_handle(
-                gattc_if, param->connect.conn_id,
+                gattc_if, s_conn_id,
                 param->search_res.start_handle,
                 param->search_res.end_handle,
                 ANCS_CTRL_PT_UUID);
 
             s_data_src_handle = find_char_handle(
-                gattc_if, param->connect.conn_id,
+                gattc_if, s_conn_id,
                 param->search_res.start_handle,
                 param->search_res.end_handle,
                 ANCS_DATA_SRC_UUID);
@@ -314,10 +362,17 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         break;
     }
 
-    case ESP_GATTC_SEARCH_CMPL_EVT:
-        ESP_LOGI(TAG, "Service discovery complete");
+    case ESP_GATTC_SEARCH_CMPL_EVT: {
+        char buf[48];
+        snprintf(buf, sizeof(buf), "Found %d services", s_svc_count);
+        ESP_LOGI(TAG, "Service discovery complete — %s", buf);
         if (s_notif_src_handle == ESP_GATT_ILLEGAL_HANDLE) {
-            ESP_LOGW(TAG, "ANCS service not found — are we bonded?");
+            /* iOS withholds ANCS on the first post-bond connection.
+             * Show count so we know if ANY services were returned,
+             * then disconnect so iOS reconnects and exposes ANCS. */
+            snprintf(buf, sizeof(buf), "%d svcs, no ANCS\nReconnecting...", s_svc_count);
+            ui_show_status(buf);
+            esp_ble_gap_disconnect(s_remote_bda);
             break;
         }
         /* Enable Notification Source notifications first */
@@ -325,43 +380,62 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         esp_ble_gattc_register_for_notify(gattc_if,
             s_remote_bda, s_notif_src_handle);
         break;
+    }
 
     case ESP_GATTC_REG_FOR_NOTIFY_EVT: {
         if (param->reg_for_notify.status != ESP_GATT_OK) {
+            char buf[40];
+            snprintf(buf, sizeof(buf), "reg_notify fail\nstatus=%d",
+                     param->reg_for_notify.status);
+            ui_show_status(buf);
             ESP_LOGE(TAG, "register_for_notify failed: %d",
                      param->reg_for_notify.status);
             break;
         }
-        /* Write CCCD = 0x0001 (enable notifications) */
-        uint8_t notify_en[2] = {0x01, 0x00};
-        uint16_t cccd_handle;
 
-        /* Find the CCCD descriptor for the just-registered characteristic */
+        uint8_t  notify_en[2] = {0x01, 0x00};
+        uint16_t char_h       = param->reg_for_notify.handle;
+        uint16_t cccd_handle  = ESP_GATT_ILLEGAL_HANDLE;
+
+        /* Find the CCCD descriptor */
         esp_gattc_descr_elem_t descr[4];
         uint16_t descr_count = 4;
         esp_bt_uuid_t cccd_uuid = {
             .len = ESP_UUID_LEN_16,
             .uuid.uuid16 = ESP_GATT_UUID_CHAR_CLIENT_CONFIG,
         };
-        uint16_t char_h = param->reg_for_notify.handle;
         esp_ble_gattc_get_descr_by_char_handle(
             gattc_if, s_conn_id, char_h, cccd_uuid, descr, &descr_count);
+
         if (descr_count > 0) {
             cccd_handle = descr[0].handle;
-            esp_ble_gattc_write_char_descr(
-                gattc_if, s_conn_id, cccd_handle,
-                sizeof(notify_en), notify_en,
-                ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+            ESP_LOGI(TAG, "Writing CCCD h=0x%04x for char h=0x%04x",
+                     cccd_handle, char_h);
+        } else {
+            /* Fallback: CCCD is almost always char_handle + 1 in ANCS */
+            cccd_handle = char_h + 1;
+            ESP_LOGW(TAG, "CCCD not found via lookup — using fallback h=0x%04x",
+                     cccd_handle);
+        }
+
+        esp_err_t werr = esp_ble_gattc_write_char_descr(
+            gattc_if, s_conn_id, cccd_handle,
+            sizeof(notify_en), notify_en,
+            ESP_GATT_WRITE_TYPE_RSP, ESP_GATT_AUTH_REQ_NONE);
+        if (werr != ESP_OK) {
+            ESP_LOGE(TAG, "CCCD write err: %s", esp_err_to_name(werr));
         }
 
         /* Advance to next step */
         if (s_disc_state == DISC_NOTIF_SRC_CCCD) {
             s_disc_state = DISC_DATA_SRC_CCCD;
+            ESP_LOGI(TAG, "Registering DataSrc notify (h=0x%04x)", s_data_src_handle);
             esp_ble_gattc_register_for_notify(gattc_if,
                 s_remote_bda, s_data_src_handle);
         } else if (s_disc_state == DISC_DATA_SRC_CCCD) {
             s_disc_state = DISC_DONE;
-            ESP_LOGI(TAG, "ANCS fully subscribed — waiting for notifications");
+            ESP_LOGI(TAG, "ANCS fully subscribed");
+            ui_show_status("Ready - send a text!");
         }
         break;
     }
@@ -377,15 +451,15 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             uint8_t event_id  = data[0];
             uint8_t flags     = data[1];
             uint8_t cat       = data[2];
-            /* data[3] = CategoryCount, skip */
             uint32_t uid = data[4] | ((uint32_t)data[5] << 8) |
                            ((uint32_t)data[6] << 16) | ((uint32_t)data[7] << 24);
 
-            ESP_LOGI(TAG, "NotifSrc event=%d cat=%s uid=%lu flags=0x%02x",
+            ESP_LOGI(TAG, "NotifSrc event=%d cat=%s uid=%lu",
                      event_id, ancs_category_name((ancs_category_t)cat),
-                     (unsigned long)uid, flags);
+                     (unsigned long)uid);
 
-            if (event_id == ANCS_EVT_REMOVED) break; /* nothing to fetch */
+            /* Ignore REMOVED events — don't touch the display */
+            if (event_id == ANCS_EVT_REMOVED) break;
 
             memset(&s_pending, 0, sizeof(s_pending));
             s_pending.uid      = uid;
@@ -397,15 +471,12 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             fetch_notif_attributes(uid);
 
         } else if (handle == s_data_src_handle) {
-            /* Data Source: accumulate packets until we have the full response.
-             * Simple heuristic: if the first byte of a chunk is our CommandID
-             * and bytes 1-4 match s_pending.uid, it's a new response — reset.
-             * Otherwise append. */
+
             if (len >= 5 && data[0] == ANCS_CMD_GET_NOTIF_ATTR) {
                 uint32_t uid_in = data[1] | ((uint32_t)data[2] << 8) |
                                   ((uint32_t)data[3] << 16) | ((uint32_t)data[4] << 24);
                 if (uid_in == s_pending.uid) {
-                    s_ds_len = 0; /* start of a fresh response */
+                    s_ds_len = 0;
                 }
             }
             uint16_t space = DATA_SRC_BUF_SIZE - s_ds_len;
@@ -413,18 +484,18 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             memcpy(s_ds_buf + s_ds_len, data, copy);
             s_ds_len += copy;
 
-            /* Try parsing — if successful, the response is complete */
             if (s_fetch_pending && parse_data_source(s_ds_buf, s_ds_len)) {
                 s_fetch_pending = false;
-                ESP_LOGI(TAG, "--- Notification ---");
-                ESP_LOGI(TAG, "  UID     : %lu", (unsigned long)s_pending.uid);
-                ESP_LOGI(TAG, "  Category: %s",
-                         ancs_category_name(s_pending.category));
-                ESP_LOGI(TAG, "  App     : %s", s_pending.app_id);
-                ESP_LOGI(TAG, "  Title   : %s", s_pending.title);
-                ESP_LOGI(TAG, "  Message : %s", s_pending.message);
-                ESP_LOGI(TAG, "--------------------");
+                ESP_LOGI(TAG, "Parsed: cat=%s title='%s' msg='%s'",
+                         ancs_category_name(s_pending.category),
+                         s_pending.title, s_pending.message);
                 if (s_user_cb) s_user_cb(&s_pending);
+            } else if (s_fetch_pending) {
+                /* Parse failed — show raw first bytes for debugging */
+                char dbg[48];
+                snprintf(dbg, sizeof(dbg), "Parse fail\nlen=%d b0=%02x b1=%02x",
+                         s_ds_len, s_ds_buf[0], s_ds_len > 1 ? s_ds_buf[1] : 0);
+                ui_show_status(dbg);
             }
         }
         break;
@@ -439,6 +510,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
     case ESP_GATTC_DISCONNECT_EVT:
         ESP_LOGW(TAG, "Disconnected (reason=%d) — restarting advertising",
                  param->disconnect.reason);
+        ui_show_status("Advertising...");
         s_conn_id         = 0xFFFF;
         s_notif_src_handle= ESP_GATT_ILLEGAL_HANDLE;
         s_ctrl_pt_handle  = ESP_GATT_ILLEGAL_HANDLE;
@@ -460,16 +532,24 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
 {
     switch (event) {
 
-    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:
-        ESP_LOGI(TAG, "Adv data set — starting advertising");
+    case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
+        ESP_LOGI(TAG, "ADV_DATA_RAW_SET status=%d — setting scan response",
+                 param->adv_data_raw_cmpl.status);
+        esp_ble_gap_config_scan_rsp_data_raw(raw_scan_rsp_data,
+                                             sizeof(raw_scan_rsp_data));
+        break;
+
+    case ESP_GAP_BLE_SCAN_RSP_DATA_RAW_SET_COMPLETE_EVT:
+        ESP_LOGI(TAG, "SCAN_RSP_DATA_RAW_SET status=%d — starting advertising",
+                 param->scan_rsp_data_raw_cmpl.status);
         esp_ble_gap_start_advertising(&adv_params);
         break;
 
     case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
         if (param->adv_start_cmpl.status == ESP_BT_STATUS_SUCCESS) {
-            ESP_LOGI(TAG, "Advertising started — waiting for iPhone to connect");
+            ESP_LOGI(TAG, "ADV_START_COMPLETE — advertising is live");
         } else {
-            ESP_LOGE(TAG, "Advertising start failed: %d",
+            ESP_LOGE(TAG, "ADV_START_COMPLETE failed, status=%d",
                      param->adv_start_cmpl.status);
         }
         break;
@@ -486,15 +566,18 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
         if (param->ble_security.auth_cmpl.success) {
             ESP_LOGI(TAG, "Bonded with " ESP_BD_ADDR_STR,
                      ESP_BD_ADDR_HEX(bd_addr));
-            /* Now discover ANCS service */
-            esp_bt_uuid_t ancs_uuid = {
-                .len = ESP_UUID_LEN_128,
-            };
-            memcpy(ancs_uuid.uuid.uuid128, ANCS_SVC_UUID, 16);
-            esp_ble_gattc_search_service(s_gattc_if, s_conn_id, &ancs_uuid);
+            ui_show_status("Discovering ANCS...");
+            /* Fire discovery from a timer — calling GATTC directly inside
+             * a BT event callback can deadlock the stack on ESP-IDF v6.x */
+            start_discovery_delayed();
         } else {
-            ESP_LOGE(TAG, "Auth failed: reason=0x%02x",
+            /* Bond key mismatch — happens when firmware was reflashed and NVS
+             * was wiped but iPhone still holds the old keys. Remove stale bond
+             * info so iOS can re-bond cleanly on the next connection. */
+            ESP_LOGE(TAG, "Auth failed (reason=0x%02x) — clearing stale bond",
                      param->ble_security.auth_cmpl.fail_reason);
+            esp_ble_remove_bond_device(bd_addr);
+            ui_show_status("Auth failed.\nForget on iPhone\nthen reconnect.");
         }
         break;
     }
@@ -505,6 +588,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
         break;
 
     default:
+        ESP_LOGD(TAG, "GAP event %d (unhandled)", event);
         break;
     }
 }
@@ -515,14 +599,11 @@ void ancs_client_init(ancs_notification_cb_t cb)
 {
     s_user_cb = cb;
 
-    /* Copy ANCS UUID into adv solicitation field (little-endian already) */
-    memcpy(adv_service_uuid128, ANCS_SVC_UUID, 16);
-
     ESP_ERROR_CHECK(esp_ble_gap_register_callback(gap_event_handler));
     ESP_ERROR_CHECK(esp_ble_gattc_register_callback(gattc_event_handler));
     ESP_ERROR_CHECK(esp_ble_gattc_app_register(ANCS_GATTC_APP_ID));
 
-    /* Device name shown to iPhone during pairing */
+    /* Device name stored in GATT device name attribute */
     esp_ble_gap_set_device_name("FocusPager");
 
     ESP_LOGI(TAG, "ANCS client initialised");
@@ -530,8 +611,10 @@ void ancs_client_init(ancs_notification_cb_t cb)
 
 void ancs_client_start_advertising(void)
 {
-    ESP_ERROR_CHECK(esp_ble_gap_config_adv_data(&adv_data));
-    /* adv actually starts in ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT */
+    /* Raw adv data with AD type 0x15 (solicitation) — required for iOS ANCS.
+     * Scan response is set in ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT. */
+    ESP_ERROR_CHECK(esp_ble_gap_config_adv_data_raw(raw_adv_data,
+                                                     sizeof(raw_adv_data)));
 }
 
 const char *ancs_category_name(ancs_category_t cat)

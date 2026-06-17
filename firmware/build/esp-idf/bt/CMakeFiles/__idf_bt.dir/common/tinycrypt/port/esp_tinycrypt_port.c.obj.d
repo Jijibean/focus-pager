@@ -1,0 +1,33 @@
+esp-idf/bt/CMakeFiles/__idf_bt.dir/common/tinycrypt/port/esp_tinycrypt_port.c.obj: \
+ /Users/evanji/esp/esp-idf/components/bt/common/tinycrypt/port/esp_tinycrypt_port.c \
+ /Users/evanji/esp/esp-idf/components/bt/common/tinycrypt/port/esp_tinycrypt_port.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/stdint.h \
+ /Users/evanji/esp/esp-idf/components/esp_libc/platform_include/sys/cdefs.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/cdefs.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/config.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/ieeefp.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/features.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/picolibc.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/float.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/machine/_default_types.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stddef.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_intsup.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/picolibc/include/sys/_stdint.h \
+ /Users/evanji/.espressif/tools/xtensa-esp-elf/esp-15.2.0_20251204/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/15.2.0/include/stdbool.h \
+ /Users/evanji/esp/esp-idf/components/soc/esp32/include/soc/soc_caps.h \
+ /Users/evanji/esp/esp-idf/components/soc/include/soc/soc_caps_eval.h \
+ /Users/evanji/esp/esp-idf/components/esp_security/include/esp_crypto_lock.h \
+ /Users/evanji/esp/esp-idf/components/esp_hw_support/include/esp_private/esp_crypto_lock_internal.h \
+ /Users/evanji/esp/esp-idf/components/esp_hw_support/include/esp_private/periph_ctrl.h \
+ /Users/evanji/esp/esp-idf/components/soc/esp32/include/soc/periph_defs.h \
+ /Users/evanji/focus-pager/firmware/build/config/libc/picolibc/newlib/compatibility.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/libc/picolibc.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/esp32/rev/min/full.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/idf/target/esp32.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/idf/target/esp32s2.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/idf/target/esp32s3.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/idf/target/esp32c2.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/idf/target/esp32c3.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/idf/target/esp32c6.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/idf/target/esp32h2.cdep \
+ /Users/evanji/focus-pager/firmware/build/config/idf/target.cdep

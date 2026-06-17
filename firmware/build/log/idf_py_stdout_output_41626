@@ -1,0 +1,72 @@
+Command: /Users/evanji/.espressif/python_env/idf6.2_py3.11_env/bin/python /Users/evanji/esp/esp-idf/tools/idf_monitor.py -p /dev/cu.usbserial-0001 -b 115200 --toolchain-prefix xtensa-esp32-elf- --target esp32 --revision 0 /Users/evanji/focus-pager/firmware/build/focus_pager_phase1.elf /Users/evanji/focus-pager/firmware/build/bootloader/bootloader.elf -m '/Users/evanji/.espressif/python_env/idf6.2_py3.11_env/bin/python' '/Users/evanji/esp/esp-idf/tools/idf.py' '-p' '/dev/cu.usbserial-0001'
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0040,len:6292
+load:0x40078000,len:15820
+load:0x40080400,len:3988
+entry 0x40080644
+[0;32mI (27) boot: ESP-IDF v6.1-dev-5572-g4288cd3334 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Jun 17 2026 14:51:09[0m
+[0;32mI (28) boot: Multicore bootloader[0m
+[0;32mI (30) boot: chip revision: v3.1[0m
+[0;32mI (33) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (37) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (40) boot.esp32: SPI Flash Size : 2MB[0m
+[0;32mI (44) boot: Enabling RNG early entropy source...[0m
+[0;32mI (49) boot: Partition Table:[0m
+[0;32mI (51) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (57) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (64) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (71) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (77) boot: End of partition table[0m
+[0;32mI (80) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=2a1fch (172540) map[0m
+[0;32mI (149) esp_image: segment 1: paddr=0003a224 vaddr=3ffbdb60 size=05060h ( 20576) load[0m
+[0;32mI (158) esp_image: segment 2: paddr=0003f28c vaddr=40080000 size=00d8ch (  3468) load[0m
+[0;32mI (159) esp_image: segment 3: paddr=00040020 vaddr=400d0020 size=710c4h (463044) map[0m
+[0;32mI (328) esp_image: segment 4: paddr=000b10ec vaddr=40080d8c size=14ea4h ( 85668) load[0m
+[0;32mI (363) esp_image: segment 5: paddr=000c5f98 vaddr=50000000 size=00028h (    40) load[0m
+[0;32mI (375) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (375) boot: Disabling RNG early entropy source...[0m
+[0;32mI (385) cpu_start: Multicore app[0m
+[0;32mI (394) cpu_start: GPIO 3 and 1 are used as console UART I/O pins[0m
+[0;32mI (394) cpu_start: Pro cpu start user code[0m
+[0;32mI (394) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (396) app_init: Application information:[0m
+[0;32mI (399) app_init: Project name:     focus_pager_phase1[0m
+[0;32mI (404) app_init: App version:      e095030[0m
+[0;32mI (408) app_init: Compile time:     Jun 17 2026 14:55:48[0m
+[0;32mI (413) app_init: ELF file SHA256:  16a592587...[0m
+[0;32mI (418) app_init: ESP-IDF:          v6.1-dev-5572-g4288cd3334[0m
+[0;32mI (423) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (427) efuse_init: Max chip rev:     v3.99 [0m
+[0;32mI (431) efuse_init: Chip rev:         v3.1[0m
+[0;32mI (435) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (441) heap_init: At 3FFAFF10 len 000000F0 (0 KiB): DRAM[0m
+[0;32mI (446) heap_init: At 3FFB6388 len 00001C78 (7 KiB): DRAM[0m
+[0;32mI (451) heap_init: At 3FFB9A20 len 00004108 (16 KiB): DRAM[0m
+[0;32mI (456) heap_init: At 3FFC7210 len 00018DF0 (99 KiB): DRAM[0m
+[0;32mI (462) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (467) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (473) heap_init: At 40095C30 len 0000A3D0 (40 KiB): IRAM[0m
+[0;32mI (479) spi_flash: detected chip: generic[0m
+[0;32mI (481) spi_flash: flash io: dio[0m
+[0;33mW (484) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (498) coexist: coex firmware version: 789e098[0m
+[0;32mI (502) main_task: Started on CPU0[0m
+[0;32mI (504) main_task: Calling app_main()[0m
+[0;32mI (522) BTDM_INIT: BT controller compile version [e02a38e][0m
+[0;32mI (523) BTDM_INIT: Using main XTAL as clock source[0m
+[0;32mI (524) BTDM_INIT: Bluetooth MAC: 30:76:f5:93:a8:6e[0m
+[0;32mI (529) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06[0m
+[0;32mI (915) MAIN: Bluetooth stack up — initialising ANCS client[0m
+[0;32mI (923) ANCS: GATTC registered, if=3 status=0[0m
+[0;32mI (952) ANCS: ANCS client initialised[0m
+[0;33mW (953) BT_BTM: BTM_BleWriteAdvData, Partial data write into ADV[0m
+[0;32mI (954) MAIN: Focus Pager Phase 1 running — open iPhone Bluetooth settings[0m
+[0;32mI (958) ANCS: Adv data set — starting advertising[0m
+[0;32mI (963) MAIN: and pair with 'FocusPager'. Send yourself a notification.[0m
+[0;32mI (978) ANCS: Advertising started — waiting for iPhone to connect[0m

@@ -1,0 +1,4 @@
+Command: make -j 16 all
+/Users/evanji/focus-pager/firmware/main/ui.c:148:17: warning: 's_line_buf' defined but not used [-Wunused-variable]
+  148 | static uint16_t s_line_buf[LCD_W * CHAR_H];
+      |                 ^~~~~~~~~~

@@ -1,0 +1,54 @@
+Command: make -j 16 all
+Configuration Report                                                            
+ ────────────────────────────────────────────────────────────────────────────── 
+   Parser Version: 1                                                            
+   Verbosity: default                                                           
+   Defaults policy: sdkconfig                                                   
+   Status: Finished with notifications                                          
+                                                                                
+  Default Value Mismatch                                                        
+   ──────────────────────────────────────────────────────────────────────────   
+    Using sdkconfig default values                                              
+    Choice symbols with different default selection between sdkconfig and       
+    Kconfig                                                                     
+    ESP_SYSTEM_CHECK_INT_LEVEL: Kconfig default selection:                      
+    ESP_SYSTEM_CHECK_INT_LEVEL_4, sdkconfig default selection:                  
+    ESP_SYSTEM_CHECK_INT_LEVEL_5                                                
+   ──────────────────────────────────────────────────────────────────────────   
+  Disabled Symbols/Choices With User-Set Value                                  
+   ──────────────────────────────────────────────────────────────────────────   
+    * ESP_CONSOLE_UART_BAUDRATE (defined at                                     
+    /Users/evanji/esp/esp-idf/components/esp_stdio/Kconfig:150) with            
+    user-set value 115200 from /Users/evanji/focus-pager/firmware/sdkconfig     
+   ──────────────────────────────────────────────────────────────────────────   
+ ────────────────────────────────────────────────────────────────────────────── 
+/Users/evanji/focus-pager/firmware/main/ancs_client.c: In function 'enable_notify':
+/Users/evanji/focus-pager/firmware/main/ancs_client.c:158:58: error: passing argument 2 of 'esp_ble_gattc_register_for_notify' makes pointer from integer without a cast [-Wint-conversion]
+  158 |     esp_ble_gattc_register_for_notify(gattc_if, s_pending.uid /* unused peer */,
+      |                                                 ~~~~~~~~~^~~~
+      |                                                          |
+      |                                                          uint32_t {aka long unsigned int}
+In file included from /Users/evanji/focus-pager/firmware/main/ancs_client.c:22:
+/Users/evanji/esp/esp-idf/components/bt/host/bluedroid/api/include/api/esp_gattc_api.h:1070:60: note: expected 'uint8_t *' {aka 'unsigned char *'} but argument is of type 'uint32_t' {aka 'long unsigned int'}
+ 1070 |                                              esp_bd_addr_t server_bda,
+      |                                              ~~~~~~~~~~~~~~^~~~~~~~~~
+/Users/evanji/focus-pager/firmware/main/ancs_client.c: In function 'gattc_event_handler':
+/Users/evanji/focus-pager/firmware/main/ancs_client.c:292:36: error: initialization of 'esp_gatt_srvc_id_t *' from incompatible pointer type 'esp_gatt_id_t *' [-Wincompatible-pointer-types]
+  292 |         esp_gatt_srvc_id_t *srvc = &param->search_res.srvc_id;
+      |                                    ^
+/Users/evanji/focus-pager/firmware/main/ancs_client.c:333:31: error: 'struct gattc_search_cmpl_evt_param' has no member named 'remote_bda'
+  333 |             param->search_cmpl.remote_bda, s_notif_src_handle);
+      |                               ^
+/Users/evanji/focus-pager/firmware/main/ancs_client.c:368:38: error: 'struct gattc_reg_for_notify_evt_param' has no member named 'remote_bda'
+  368 |                 param->reg_for_notify.remote_bda, s_data_src_handle);
+      |                                      ^
+/Users/evanji/focus-pager/firmware/main/ancs_client.c: At top level:
+/Users/evanji/focus-pager/firmware/main/ancs_client.c:154:13: warning: 'enable_notify' defined but not used [-Wunused-function]
+  154 | static void enable_notify(esp_gatt_if_t gattc_if, uint16_t conn_id,
+      |             ^~~~~~~~~~~~~
+configdep.c:648: in main: exec_process exited with error code: 1
+make[2]: *** [esp-idf/main/CMakeFiles/__idf_main.dir/ancs_client.c.obj] Error 1
+make[2]: *** Waiting for unfinished jobs....
+make[1]: *** [esp-idf/main/CMakeFiles/__idf_main.dir/all] Error 2
+make[1]: *** Waiting for unfinished jobs....
+make: *** [all] Error 2

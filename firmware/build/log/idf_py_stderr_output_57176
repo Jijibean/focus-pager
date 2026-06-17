@@ -1,0 +1,14 @@
+Command: make -j 16 all
+/Users/evanji/focus-pager/firmware/main/ui.c: In function 'ui_init':
+/Users/evanji/focus-pager/firmware/main/ui.c:214:10: error: 'esp_lcd_panel_dev_config_t' has no member named 'rgb_data_endian'; did you mean 'data_endian'?
+  214 |         .rgb_data_endian = LCD_RGB_DATA_ENDIAN_BIG,
+      |          ^~~~~~~~~~~~~~~
+      |          data_endian
+/Users/evanji/focus-pager/firmware/main/ui.c: At top level:
+/Users/evanji/focus-pager/firmware/main/ui.c:148:17: warning: 's_line_buf' defined but not used [-Wunused-variable]
+  148 | static uint16_t s_line_buf[LCD_W * CHAR_H];
+      |                 ^~~~~~~~~~
+configdep.c:648: in main: exec_process exited with error code: 1
+make[2]: *** [esp-idf/main/CMakeFiles/__idf_main.dir/ui.c.obj] Error 1
+make[1]: *** [esp-idf/main/CMakeFiles/__idf_main.dir/all] Error 2
+make: *** [all] Error 2

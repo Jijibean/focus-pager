@@ -1,0 +1,95 @@
+Command: /Users/evanji/.espressif/python_env/idf6.2_py3.11_env/bin/python /Users/evanji/esp/esp-idf/tools/idf_monitor.py -p /dev/cu.usbserial-0001 -b 115200 --toolchain-prefix xtensa-esp32-elf- --target esp32 --revision 0 /Users/evanji/focus-pager/firmware/build/focus_pager_phase1.elf /Users/evanji/focus-pager/firmware/build/bootloader/bootloader.elf -m '/Users/evanji/.espressif/python_env/idf6.2_py3.11_env/bin/python' '/Users/evanji/esp/esp-idf/tools/idf.py' '-p' '/dev/cu.usbserial-0001'
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0040,len:6292
+load:0x40078000,len:15820
+load:0x40080400,len:3988
+entry 0x40080644
+[0;32mI (27) boot: ESP-IDF v6.1-dev-5572-g4288cd3334 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Jun 17 2026 14:51:09[0m
+[0;32mI (28) boot: Multicore bootloader[0m
+[0;32mI (30) boot: chip revision: v3.1[0m
+[0;32mI (33) boot.esp32: SPI Speed      : 40MHz[0m
+[0;32mI (37) boot.esp32: SPI Mode       : DIO[0m
+[0;32mI (40) boot.esp32: SPI Flash Size : 2MB[0m
+[0;32mI (44) boot: Enabling RNG early entropy source...[0m
+[0;32mI (49) boot: Partition Table:[0m
+[0;32mI (51) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (57) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (64) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (71) boot:  2 factory          factory app      00 00 00010000 00100000[0m
+[0;32mI (77) boot: End of partition table[0m
+[0;32mI (80) esp_image: segment 0: paddr=00010020 vaddr=3f400020 size=2d524h (185636) map[0m
+[0;32mI (154) esp_image: segment 1: paddr=0003d54c vaddr=3ffbdb60 size=02acch ( 10956) load[0m
+[0;32mI (159) esp_image: segment 2: paddr=00040020 vaddr=400d0020 size=777a8h (489384) map[0m
+[0;32mI (333) esp_image: segment 3: paddr=000b77d0 vaddr=3ffc062c size=02800h ( 10240) load[0m
+[0;32mI (337) esp_image: segment 4: paddr=000b9fd8 vaddr=40080000 size=186d8h (100056) load[0m
+[0;32mI (379) esp_image: segment 5: paddr=000d26b8 vaddr=50000000 size=00028h (    40) load[0m
+[0;32mI (391) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (391) boot: Disabling RNG early entropy source...[0m
+[0;32mI (402) cpu_start: Multicore app[0m
+[0;32mI (410) cpu_start: GPIO 3 and 1 are used as console UART I/O pins[0m
+[0;32mI (410) cpu_start: Pro cpu start user code[0m
+[0;32mI (411) cpu_start: cpu freq: 160000000 Hz[0m
+[0;32mI (412) app_init: Application information:[0m
+[0;32mI (416) app_init: Project name:     focus_pager_phase1[0m
+[0;32mI (421) app_init: App version:      e095030-dirty[0m
+[0;32mI (425) app_init: Compile time:     Jun 17 2026 15:34:00[0m
+[0;32mI (430) app_init: ELF file SHA256:  9e21f5205...[0m
+[0;32mI (435) app_init: ESP-IDF:          v6.1-dev-5572-g4288cd3334[0m
+[0;32mI (440) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (444) efuse_init: Max chip rev:     v3.99 [0m
+[0;32mI (448) efuse_init: Chip rev:         v3.1[0m
+[0;32mI (452) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (458) heap_init: At 3FFAFF10 len 000000F0 (0 KiB): DRAM[0m
+[0;32mI (463) heap_init: At 3FFB6388 len 00001C78 (7 KiB): DRAM[0m
+[0;32mI (468) heap_init: At 3FFB9A20 len 00004108 (16 KiB): DRAM[0m
+[0;32mI (474) heap_init: At 3FFC92F8 len 00016D08 (91 KiB): DRAM[0m
+[0;32mI (479) heap_init: At 3FFE0440 len 00003AE0 (14 KiB): D/IRAM[0m
+[0;32mI (484) heap_init: At 3FFE4350 len 0001BCB0 (111 KiB): D/IRAM[0m
+[0;32mI (490) heap_init: At 400986D8 len 00007928 (30 KiB): IRAM[0m
+[0;32mI (497) spi_flash: detected chip: generic[0m
+[0;32mI (499) spi_flash: flash io: dio[0m
+[0;33mW (502) spi_flash: Detected size(4096k) larger than the size in the binary image header(2048k). Using the size in the binary image header.[0m
+[0;32mI (515) coexist: coex firmware version: 789e098[0m
+[0;32mI (519) main_task: Started on CPU0[0m
+[0;32mI (521) main_task: Calling app_main()[0m
+[0;32mI (540) BTDM_INIT: BT controller compile version [e02a38e][0m
+[0;32mI (541) BTDM_INIT: Using main XTAL as clock source[0m
+[0;32mI (543) BTDM_INIT: Bluetooth MAC: 30:76:f5:93:a8:6e[0m
+[0;32mI (547) phy_init: phy_version 4863,a3a4459,Oct 28 2025,14:30:06[0m
+[0;32mI (634) phy_init: Saving new calibration data due to checksum failure or outdated calibration data, mode(0)[0m
+[0;32mI (1066) MAIN: Bluetooth stack up — initialising ANCS client[0m
+[0;32mI (1068) ANCS: GATTC registered, if=3 status=0[0m
+[0;32mI (1069) ANCS: ANCS client initialised[0m
+[0;32mI (1071) MAIN: Focus Pager Phase 1 running — open iPhone Bluetooth settings[0m
+[0;32mI (1075) ANCS: ADV_DATA_RAW_SET status=0 — setting scan response[0m
+[0;32mI (1083) MAIN: and pair with 'FocusPager'. Send yourself a notification.[0m
+[0;32mI (1086) ANCS: SCAN_RSP_DATA_RAW_SET status=0 — starting advertising[0m
+[0;32mI (1114) ANCS: ADV_START_COMPLETE — advertising is live[0m
+[0;32mI (1235) UI: ST7789 initialised (240x320)[0m
+[0;32mI (1236) MAIN: Display test: RED[0m
+[0;32mI (2272) MAIN: Display test: GREEN[0m
+[0;32mI (3308) MAIN: Display test: BLUE[0m
+[0;32mI (11730) ANCS: Connected, conn_id=0[0m
+[0;32mI (11785) ANCS: GATTC open OK — requesting encryption[0m
+[0;33mW (13614) BT_SMP: FOR LE SC LTK IS USED INSTEAD OF STK[0m
+[0;32mI (13931) ANCS: Bonded with 58:a2:15:1e:d7:6a[0m
+[0;32mI (14789) ANCS: Starting service discovery (conn=0 if=3)[0m
+[0;32mI (15094) ANCS: Service #1 found (uuid_len=2)[0m
+[0;32mI (15095) ANCS: Service #2 found (uuid_len=2)[0m
+[0;32mI (15095) ANCS: Service #3 found (uuid_len=2)[0m
+[0;32mI (15096) ANCS: Service #4 found (uuid_len=16)[0m
+[0;32mI (15100) ANCS: Service #5 found (uuid_len=16)[0m
+[0;32mI (15104) ANCS: Service #6 found (uuid_len=2)[0m
+[0;32mI (15109) ANCS: Service #7 found (uuid_len=2)[0m
+[0;32mI (15112) ANCS: Service #8 found (uuid_len=16)[0m
+[0;32mI (15116) ANCS: ANCS service found: start=0x0023 end=0x002c[0m
+[0;32mI (15122) ANCS:   NotifSrc=0x0028 CtrlPt=0x0025 DataSrc=0x002b[0m
+[0;32mI (15127) ANCS: Service #9 found (uuid_len=16)[0m
+[0;32mI (15131) ANCS: Service discovery complete — Found 9 services[0m
+[0;32mI (15140) ANCS: ANCS fully subscribed — waiting for notifications[0m

@@ -17,10 +17,29 @@
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_gap_ble_api.h"
+#include "driver/gpio.h"
 
 #include "ancs_client.h"
+#include "ui.h"
 
-#define TAG "MAIN"
+#define TAG        "MAIN"
+#define LED_GPIO   GPIO_NUM_2   /* onboard LED on most ESP32-WROOM-32 dev boards */
+
+/* ── LED blink task ─────────────────────────────────────────────────────── *
+ * Blinks the onboard LED so we can confirm the firmware is actually running.
+ * Fast blink (200 ms) = advertising. Will change pattern in later phases.
+ */
+static void led_task(void *arg)
+{
+    gpio_reset_pin(LED_GPIO);
+    gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
+    while (1) {
+        gpio_set_level(LED_GPIO, 1);
+        vTaskDelay(pdMS_TO_TICKS(200));
+        gpio_set_level(LED_GPIO, 0);
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
 
 /* ── Notification callback ───────────────────────────────────────────────── *
  * Called from the BT task for every fully-parsed ANCS notification.
@@ -31,8 +50,7 @@ static void on_notification(const ancs_notification_t *n)
     ESP_LOGI(TAG, "[NOTIF] cat=%-14s title='%s' msg='%s' app='%s'",
              ancs_category_name(n->category),
              n->title, n->message, n->app_id);
-    /* TODO Phase 1+: render on OLED */
-    /* TODO Phase 3+: check if bricked and apply filter */
+    ui_show_notification(ancs_category_name(n->category), n->title, n->message);
 }
 
 void app_main(void)
@@ -69,7 +87,22 @@ void app_main(void)
     ESP_LOGI(TAG, "Focus Pager Phase 1 running — open iPhone Bluetooth settings");
     ESP_LOGI(TAG, "and pair with 'FocusPager'. Send yourself a notification.");
 
-    /* Everything else is event-driven inside the BT task. */
+    /* Blink onboard LED to confirm firmware is running */
+    xTaskCreate(led_task, "led", 1024, NULL, 1, NULL);
+
+    /* Display init + wiring test: cycle red → green → blue → status screen */
+    ui_init();
+    ESP_LOGI(TAG, "Display test: RED");
+    ui_fill(COLOR_RED);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "Display test: GREEN");
+    ui_fill(COLOR_GREEN);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGI(TAG, "Display test: BLUE");
+    ui_fill(COLOR_BLUE);
+    vTaskDelay(pdMS_TO_TICKS(1000));
+    ui_show_status("Advertising...");
+
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
     }
