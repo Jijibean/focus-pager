@@ -2,6 +2,8 @@ idf_component_register(
     SRCS
         "main.c"
         "ancs_client.c"
+        "brick_service.c"
+        "pager_state.c"
         "ui.c"
     INCLUDE_DIRS
         "."
@@ -11,4 +13,6 @@ idf_component_register(
         esp_common
         esp_lcd
         driver
+        mbedtls
+        esp_timer
 )
