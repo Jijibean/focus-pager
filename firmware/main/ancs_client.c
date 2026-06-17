@@ -122,6 +122,9 @@ static uint16_t s_ds_len = 0;
 static ancs_notification_t s_pending = {0};
 static bool s_fetch_pending = false;
 
+/* Remote device BDA stored at connect time (used in subsequent GATT calls) */
+static esp_bd_addr_t s_remote_bda = {0};
+
 /* ── Helpers ─────────────────────────────────────────────────────────────── */
 
 static bool uuid128_match(const uint8_t *a, const uint8_t *b)
@@ -147,17 +150,6 @@ static uint16_t find_char_handle(esp_gatt_if_t gattc_if, uint16_t conn_id,
         return ESP_GATT_ILLEGAL_HANDLE;
     }
     return result[0].char_handle;
-}
-
-/* Write the CCCD (client characteristic configuration descriptor) to enable
- * notifications for a given characteristic handle. */
-static void enable_notify(esp_gatt_if_t gattc_if, uint16_t conn_id,
-                          uint16_t char_handle)
-{
-    /* First register for notifications at the Bluedroid layer */
-    esp_ble_gattc_register_for_notify(gattc_if, s_pending.uid /* unused peer */,
-                                      char_handle);
-    /* The actual CCCD write happens in ESP_GATTC_REG_FOR_NOTIFY_EVT */
 }
 
 /* Request Title + Message for a notification UID */
@@ -276,6 +268,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         ESP_LOGI(TAG, "Connected, conn_id=%d", param->connect.conn_id);
         s_conn_id = param->connect.conn_id;
         s_disc_state = DISC_IDLE;
+        memcpy(s_remote_bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
         /* Kick off bonding / service discovery */
         esp_ble_set_encryption(param->connect.remote_bda,
                                ESP_BLE_SEC_ENCRYPT_MITM);
@@ -289,9 +282,9 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
 
     case ESP_GATTC_SEARCH_RES_EVT: {
         /* Check if this is the ANCS service */
-        esp_gatt_srvc_id_t *srvc = &param->search_res.srvc_id;
-        if (srvc->id.uuid.len == ESP_UUID_LEN_128 &&
-            uuid128_match(srvc->id.uuid.uuid.uuid128, ANCS_SVC_UUID))
+        esp_gatt_id_t *srvc = &param->search_res.srvc_id;
+        if (srvc->uuid.len == ESP_UUID_LEN_128 &&
+            uuid128_match(srvc->uuid.uuid.uuid128, ANCS_SVC_UUID))
         {
             ESP_LOGI(TAG, "ANCS service found: start=0x%04x end=0x%04x",
                      param->search_res.start_handle,
@@ -330,7 +323,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         /* Enable Notification Source notifications first */
         s_disc_state = DISC_NOTIF_SRC_CCCD;
         esp_ble_gattc_register_for_notify(gattc_if,
-            param->search_cmpl.remote_bda, s_notif_src_handle);
+            s_remote_bda, s_notif_src_handle);
         break;
 
     case ESP_GATTC_REG_FOR_NOTIFY_EVT: {
@@ -365,7 +358,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         if (s_disc_state == DISC_NOTIF_SRC_CCCD) {
             s_disc_state = DISC_DATA_SRC_CCCD;
             esp_ble_gattc_register_for_notify(gattc_if,
-                param->reg_for_notify.remote_bda, s_data_src_handle);
+                s_remote_bda, s_data_src_handle);
         } else if (s_disc_state == DISC_DATA_SRC_CCCD) {
             s_disc_state = DISC_DONE;
             ESP_LOGI(TAG, "ANCS fully subscribed — waiting for notifications");
