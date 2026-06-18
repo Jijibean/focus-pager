@@ -43,6 +43,7 @@
 #define XX_UNBRICK_EVT  0x03
 #define XX_AUTH         0x04
 #define XX_COMMAND      0x05
+#define XX_DISPLAY      0x06
 
 /* ── GATT attribute table indices ───────────────────────────────────────── */
 enum {
@@ -61,6 +62,9 @@ enum {
 
     IDX_CMD_DECL,
     IDX_CMD_VAL,
+
+    IDX_DISP_DECL,
+    IDX_DISP_VAL,
 
     ATTR_COUNT,
 };
@@ -144,7 +148,7 @@ static esp_gatts_attr_db_t s_attr_db[ATTR_COUNT];
 static void build_attr_db(void)
 {
     /* Helper UUIDs */
-    static esp_bt_uuid_t svc_uuid, bs_uuid, ue_uuid, au_uuid, cmd_uuid;
+    static esp_bt_uuid_t svc_uuid, bs_uuid, ue_uuid, au_uuid, cmd_uuid, disp_uuid;
     static esp_bt_uuid_t char_decl_uuid = {
         .len = ESP_UUID_LEN_16,
         .uuid.uuid16 = ESP_GATT_UUID_CHAR_DECLARE,
@@ -162,7 +166,8 @@ static void build_attr_db(void)
     bs_uuid  = make_uuid(XX_BRICK_STATE);
     ue_uuid  = make_uuid(XX_UNBRICK_EVT);
     au_uuid  = make_uuid(XX_AUTH);
-    cmd_uuid = make_uuid(XX_COMMAND);
+    cmd_uuid  = make_uuid(XX_COMMAND);
+    disp_uuid = make_uuid(XX_DISPLAY);
 
     /* Service */
     s_attr_db[IDX_SVC] = (esp_gatts_attr_db_t){
@@ -297,6 +302,31 @@ static void build_attr_db(void)
             .uuid_p      = cmd_uuid.uuid.uuid128,
             .perm        = ESP_GATT_PERM_WRITE_ENCRYPTED,
             .max_length  = 5,
+            .length      = 1,
+            .value       = (uint8_t *)&zero1,
+        },
+    };
+
+    /* Display Data declaration */
+    s_attr_db[IDX_DISP_DECL] = (esp_gatts_attr_db_t){
+        .attr_control = {.auto_rsp = ESP_GATT_AUTO_RSP},
+        .att_desc = {
+            .uuid_length = ESP_UUID_LEN_16,
+            .uuid_p      = (uint8_t *)&char_decl_uuid.uuid.uuid16,
+            .perm        = ESP_GATT_PERM_READ,
+            .max_length  = sizeof(char_prop_w),
+            .length      = sizeof(char_prop_w),
+            .value       = (uint8_t *)&char_prop_w,
+        },
+    };
+    /* Display Data value — auto-response, parsed in WRITE_EVT */
+    s_attr_db[IDX_DISP_VAL] = (esp_gatts_attr_db_t){
+        .attr_control = {.auto_rsp = ESP_GATT_AUTO_RSP},
+        .att_desc = {
+            .uuid_length = ESP_UUID_LEN_128,
+            .uuid_p      = disp_uuid.uuid.uuid128,
+            .perm        = ESP_GATT_PERM_WRITE_ENCRYPTED,
+            .max_length  = 128,
             .length      = 1,
             .value       = (uint8_t *)&zero1,
         },
@@ -437,6 +467,47 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                 esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
                                             param->write.trans_id,
                                             ESP_GATT_OK, NULL);
+            }
+
+        } else if (h == s_handles[IDX_DISP_VAL] && len >= 1) {
+            /* Display Data — parse opcode + payload */
+            uint8_t opcode = val[0];
+            switch (opcode) {
+            case 0x01:  /* TIME_SYNC: [op, hour, min, sec, dow, year_hi, year_lo, month, day] */
+                if (len >= 9) {
+                    uint16_t year = ((uint16_t)val[5] << 8) | val[6];
+                    ui_set_time(val[1], val[2], val[3], val[4], year, val[7], val[8]);
+                }
+                break;
+            case 0x02:  /* TODO_SET: [op, index, checked, text...] */
+                if (len >= 4) {
+                    char text[33] = {0};
+                    int tlen = len - 3;
+                    if (tlen > 32) tlen = 32;
+                    memcpy(text, &val[3], tlen);
+                    text[tlen] = '\0';
+                    ui_set_todo(val[1], val[2] != 0, text);
+                }
+                break;
+            case 0x03:  /* TODO_CLEAR */
+                ui_clear_todos();
+                break;
+            case 0x04:  /* MESSAGE_SET: [op, text...] */
+                if (len >= 2) {
+                    char text[65] = {0};
+                    int tlen = len - 1;
+                    if (tlen > 64) tlen = 64;
+                    memcpy(text, &val[1], tlen);
+                    text[tlen] = '\0';
+                    ui_set_message(text);
+                }
+                break;
+            case 0x05:  /* MESSAGE_CLR */
+                ui_clear_message();
+                break;
+            default:
+                ESP_LOGW(TAG, "Unknown display opcode 0x%02x", opcode);
+                break;
             }
         }
         break;

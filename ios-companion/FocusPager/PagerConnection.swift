@@ -44,6 +44,7 @@ final class PagerConnection: NSObject, ObservableObject {
     private var unbrickEventChar: CBCharacteristic?
     private var authChar: CBCharacteristic?
     private var commandChar: CBCharacteristic?
+    private var displayDataChar: CBCharacteristic?
 
     private static let restoreIdentifier = "com.focuspager.central"
 
@@ -107,6 +108,70 @@ final class PagerConnection: NSObject, ObservableObject {
         startUnbrickFlow(triggeredBy: "manual")
     }
 
+    // MARK: Display data
+
+    /// Send current date/time to the pager.
+    func syncTime() {
+        guard let displayDataChar else {
+            logEvent("Cannot sync time — not connected")
+            return
+        }
+        let now = Date()
+        let cal = Calendar.current
+        let comps = cal.dateComponents([.hour, .minute, .second, .weekday, .year, .month, .day], from: now)
+        // iOS weekday: 1=Sun..7=Sat → pager dow: 0=Sun..6=Sat
+        let dow = UInt8((comps.weekday ?? 1) - 1)
+        let year = UInt16(comps.year ?? 2026)
+        let data = Data([
+            DisplayCommand.timeSync.rawValue,
+            UInt8(comps.hour ?? 0),
+            UInt8(comps.minute ?? 0),
+            UInt8(comps.second ?? 0),
+            dow,
+            UInt8(year >> 8), UInt8(year & 0xFF),
+            UInt8(comps.month ?? 1),
+            UInt8(comps.day ?? 1),
+        ])
+        peripheral?.writeValue(data, for: displayDataChar, type: .withResponse)
+        logEvent("Time synced")
+    }
+
+    /// Send a to-do item to the pager display.
+    func sendTodo(index: UInt8, checked: Bool, text: String) {
+        guard let displayDataChar else { return }
+        var data = Data([
+            DisplayCommand.todoSet.rawValue,
+            index,
+            checked ? 1 : 0,
+        ])
+        let textBytes = Array(text.utf8.prefix(32))
+        data.append(contentsOf: textBytes)
+        peripheral?.writeValue(data, for: displayDataChar, type: .withResponse)
+    }
+
+    /// Clear all to-do items on the pager display.
+    func clearTodos() {
+        guard let displayDataChar else { return }
+        let data = Data([DisplayCommand.todoClear.rawValue])
+        peripheral?.writeValue(data, for: displayDataChar, type: .withResponse)
+    }
+
+    /// Send a custom message to the pager display.
+    func sendMessage(_ text: String) {
+        guard let displayDataChar else { return }
+        var data = Data([DisplayCommand.messageSet.rawValue])
+        let textBytes = Array(text.utf8.prefix(64))
+        data.append(contentsOf: textBytes)
+        peripheral?.writeValue(data, for: displayDataChar, type: .withResponse)
+    }
+
+    /// Clear the custom message on the pager display.
+    func clearMessage() {
+        guard let displayDataChar else { return }
+        let data = Data([DisplayCommand.messageClear.rawValue])
+        peripheral?.writeValue(data, for: displayDataChar, type: .withResponse)
+    }
+
     // MARK: Scanning / connection lifecycle
 
     private func startScan() {
@@ -160,6 +225,7 @@ final class PagerConnection: NSObject, ObservableObject {
         unbrickEventChar = nil
         authChar = nil
         commandChar = nil
+        displayDataChar = nil
         peripheral = nil
         lastUnbrickCounter = nil
         unbrickInFlight = false
@@ -360,6 +426,8 @@ extension PagerConnection: CBPeripheralDelegate {
                 authChar = char
             case BrickGATT.command:
                 commandChar = char
+            case BrickGATT.displayData:
+                displayDataChar = char
             default:
                 break
             }
@@ -369,11 +437,14 @@ extension PagerConnection: CBPeripheralDelegate {
         let missing = [
             ("BrickState", brickStateChar), ("UnbrickEvent", unbrickEventChar),
             ("Auth", authChar), ("Command", commandChar),
+            ("Display", displayDataChar),
         ].filter { $0.1 == nil }.map(\.0)
 
         if missing.isEmpty {
             connectionState = .connected
             logEvent("Characteristics ready — pager usable")
+            // Auto-sync time on connect
+            syncTime()
         } else {
             logEvent("Missing characteristics: \(missing.joined(separator: ", "))")
         }

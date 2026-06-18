@@ -187,7 +187,7 @@ static void hfp_client_cb(esp_hf_client_cb_event_t event,
             memcpy(s_peer_bda, param->conn_stat.remote_bda,
                    sizeof(esp_bd_addr_t));
             ESP_LOGI(TAG, "HFP SLC connected");
-            ui_show_status("Ready - send a text!");
+            ui_set_status_hfp("HFP");
             break;
         case ESP_HF_CLIENT_CONNECTION_STATE_DISCONNECTED:
             s_state = HFP_DISCONNECTED;
@@ -236,7 +236,7 @@ static void hfp_client_cb(esp_hf_client_cb_event_t event,
         } else if (param->call.status == ESP_HF_CALL_STATUS_NO_CALLS) {
             if (s_state != HFP_DISCONNECTED) {
                 s_state = HFP_CONNECTED;
-                ui_show_status("Ready - send a text!");
+                ui_show_idle();
             }
         }
         break;
@@ -252,7 +252,7 @@ static void hfp_client_cb(esp_hf_client_cb_event_t event,
                    s_state == HFP_CALL_INCOMING) {
             /* Call was rejected/missed */
             s_state = HFP_CONNECTED;
-            ui_show_status("Ready - send a text!");
+            ui_show_idle();
         }
         break;
 
@@ -363,7 +363,7 @@ void hfp_client_button_press(void)
         ESP_LOGI(TAG, "Hanging up");
         esp_hf_client_reject_call();
         s_state = HFP_CONNECTED;
-        ui_show_status("Ready - send a text!");
+        ui_show_idle();
         break;
     case HFP_DISCONNECTED:
         ESP_LOGW(TAG, "Button pressed but HFP not connected — is iPhone paired?");

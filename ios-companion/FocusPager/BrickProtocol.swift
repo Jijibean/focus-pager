@@ -20,6 +20,7 @@ enum BrickGATT {
     static let unbrickEvent = CBUUID(string: "B41C0003-9E5A-4C7B-9D2F-0A1B2C3D4E5F")
     static let auth        = CBUUID(string: "B41C0004-9E5A-4C7B-9D2F-0A1B2C3D4E5F")
     static let command     = CBUUID(string: "B41C0005-9E5A-4C7B-9D2F-0A1B2C3D4E5F")
+    static let displayData = CBUUID(string: "B41C0006-9E5A-4C7B-9D2F-0A1B2C3D4E5F")
 
     /// Characteristics the app subscribes to (CCCD notify) on connect.
     static let notifyCharacteristics: [CBUUID] = [brickState, unbrickEvent]
@@ -49,6 +50,15 @@ enum ConnectionState: Equatable {
     case scanning
     case connecting
     case connected
+}
+
+/// `DisplayData` characteristic opcodes (`B41C0006`).
+enum DisplayCommand: UInt8 {
+    case timeSync    = 0x01
+    case todoSet     = 0x02
+    case todoClear   = 0x03
+    case messageSet  = 0x04
+    case messageClear = 0x05
 }
 
 /// Names the pager advertises under (used by the name-based scan fallback).

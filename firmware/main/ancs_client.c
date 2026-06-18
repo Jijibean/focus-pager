@@ -144,7 +144,7 @@ static void discovery_timer_cb(void *arg)
     esp_err_t err = esp_ble_gattc_search_service(s_gattc_if, s_conn_id, NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "search_service failed: %s", esp_err_to_name(err));
-        ui_show_status("Search failed\nDisconnecting...");
+        ui_set_status_ble("Err");
         esp_ble_gap_disconnect(s_remote_bda);
     }
 }
@@ -304,7 +304,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         s_conn_id = param->connect.conn_id;
         s_disc_state = DISC_IDLE;
         memcpy(s_remote_bda, param->connect.remote_bda, sizeof(esp_bd_addr_t));
-        ui_show_status("Opening GATTC...");
+        ui_set_status_ble("GATTC");
         /* Must open the GATTC client channel before service discovery.
          * Without this, search_service fires into a void and SEARCH_CMPL
          * never arrives. is_direct=true reuses the existing BLE link. */
@@ -315,11 +315,11 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
     case ESP_GATTC_OPEN_EVT:
         if (param->open.status != ESP_GATT_OK) {
             ESP_LOGE(TAG, "GATTC open failed: %d", param->open.status);
-            ui_show_status("GATTC open failed\nRetrying...");
+            ui_set_status_ble("Retry");
             esp_ble_gap_disconnect(s_remote_bda);
         } else {
             ESP_LOGI(TAG, "GATTC open OK — requesting encryption");
-            ui_show_status("Bonding...");
+            ui_set_status_ble("Bond");
             esp_ble_set_encryption(param->open.remote_bda,
                                    ESP_BLE_SEC_ENCRYPT_MITM);
         }
@@ -370,8 +370,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             /* iOS withholds ANCS on the first post-bond connection.
              * Show count so we know if ANY services were returned,
              * then disconnect so iOS reconnects and exposes ANCS. */
-            snprintf(buf, sizeof(buf), "%d svcs, no ANCS\nReconnecting...", s_svc_count);
-            ui_show_status(buf);
+            ui_set_status_ble("Retry");
             esp_ble_gap_disconnect(s_remote_bda);
             break;
         }
@@ -384,10 +383,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
 
     case ESP_GATTC_REG_FOR_NOTIFY_EVT: {
         if (param->reg_for_notify.status != ESP_GATT_OK) {
-            char buf[40];
-            snprintf(buf, sizeof(buf), "reg_notify fail\nstatus=%d",
-                     param->reg_for_notify.status);
-            ui_show_status(buf);
+            ui_set_status_ble("Err");
             ESP_LOGE(TAG, "register_for_notify failed: %d",
                      param->reg_for_notify.status);
             break;
@@ -435,7 +431,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         } else if (s_disc_state == DISC_DATA_SRC_CCCD) {
             s_disc_state = DISC_DONE;
             ESP_LOGI(TAG, "ANCS fully subscribed");
-            ui_show_status("Ready - send a text!");
+            ui_set_status_ble("BLE");
+            ui_show_idle();
         }
         break;
     }
@@ -492,10 +489,8 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
                 if (s_user_cb) s_user_cb(&s_pending);
             } else if (s_fetch_pending) {
                 /* Parse failed — show raw first bytes for debugging */
-                char dbg[48];
-                snprintf(dbg, sizeof(dbg), "Parse fail\nlen=%d b0=%02x b1=%02x",
+                ESP_LOGW(TAG, "Parse fail len=%d b0=%02x b1=%02x",
                          s_ds_len, s_ds_buf[0], s_ds_len > 1 ? s_ds_buf[1] : 0);
-                ui_show_status(dbg);
             }
         }
         break;
@@ -510,7 +505,7 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
     case ESP_GATTC_DISCONNECT_EVT:
         ESP_LOGW(TAG, "Disconnected (reason=%d) — restarting advertising",
                  param->disconnect.reason);
-        ui_show_status("Advertising...");
+        ui_set_status_ble("Adv");
         s_conn_id         = 0xFFFF;
         s_notif_src_handle= ESP_GATT_ILLEGAL_HANDLE;
         s_ctrl_pt_handle  = ESP_GATT_ILLEGAL_HANDLE;
@@ -566,7 +561,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
         if (param->ble_security.auth_cmpl.success) {
             ESP_LOGI(TAG, "Bonded with " ESP_BD_ADDR_STR,
                      ESP_BD_ADDR_HEX(bd_addr));
-            ui_show_status("Discovering ANCS...");
+            ui_set_status_ble("ANCS");
             /* Fire discovery from a timer — calling GATTC directly inside
              * a BT event callback can deadlock the stack on ESP-IDF v6.x */
             start_discovery_delayed();
@@ -577,7 +572,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event,
             ESP_LOGE(TAG, "Auth failed (reason=0x%02x) — clearing stale bond",
                      param->ble_security.auth_cmpl.fail_reason);
             esp_ble_remove_bond_device(bd_addr);
-            ui_show_status("Auth failed.\nForget on iPhone\nthen reconnect.");
+            ui_set_status_ble("Auth!");
         }
         break;
     }

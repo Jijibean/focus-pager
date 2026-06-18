@@ -1,5 +1,5 @@
 /**
- * ui.c — ST7789 240x320 display driver using ESP-IDF esp_lcd component
+ * ui.c — ST7789 320x240 landscape display driver using ESP-IDF esp_lcd
  *
  * Pin assignments:
  *   DIN (MOSI) → GPIO23    CLK  → GPIO18
@@ -18,6 +18,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_vendor.h"
 #include "esp_lcd_panel_ops.h"
+#include "esp_timer.h"
 #include "esp_log.h"
 
 #define TAG "UI"
@@ -30,15 +31,35 @@
 #define LCD_RST      4
 #define LCD_BL      21
 
-/* ── Display geometry ────────────────────────────────────────────────────── */
-#define LCD_W       240
-#define LCD_H       320
+/* ── Display geometry (landscape) ────────────────────────────────────────── */
+#define LCD_W       320
+#define LCD_H       240
 #define LCD_SPI     SPI2_HOST
-#define LCD_HZ      (40 * 1000 * 1000)   /* 40 MHz */
+#define LCD_HZ      (40 * 1000 * 1000)
+
+/* ── Font ────────────────────────────────────────────────────────────────── */
+#define CHAR_W   6
+#define CHAR_H   8
+
+/* ── Layout constants (pixel Y) ──────────────────────────────────────────── */
+#define STATUS_Y        0       /* status bar top */
+#define STATUS_H       16       /* 2x scale → 16px */
+#define DIV1_Y         17       /* first divider */
+#define CLOCK_Y        26       /* clock top (4x) */
+#define CLOCK_H        32       /* 4x scale → 32px */
+#define AMPM_Y         38       /* AM/PM baseline (2x), vertically centred with clock */
+#define DATE_Y         62       /* date top (2x) */
+#define DATE_H         16       /* 2x scale → 16px */
+#define DIV2_Y         81       /* second divider */
+#define CONTENT_Y      86       /* content area top */
+#define CONTENT_LINE_H 18       /* spacing between content lines (2x + 2px gap) */
+
+#define MAX_TODOS       4
+#define TODO_TEXT_LEN  32
+#define MSG_TEXT_LEN   64
 
 /* ── Simple 6x8 font (ASCII 32–127) ─────────────────────────────────────── *
- * Each character is 6 bytes wide × 8 pixels tall, column-major, LSB=top.
- * This is the classic Arduino/Adafruit GFX font subset.
+ * Column-major, LSB=top row.
  */
 static const uint8_t font6x8[][6] = {
     {0x00,0x00,0x00,0x00,0x00,0x00}, /* ' ' */
@@ -138,44 +159,294 @@ static const uint8_t font6x8[][6] = {
     {0x08,0x04,0x08,0x10,0x08,0x00}, /* '~' */
 };
 
-/* ── State ───────────────────────────────────────────────────────────────── */
+/* ── Screen state ────────────────────────────────────────────────────────── */
+typedef enum {
+    SCREEN_IDLE,
+    SCREEN_BRICKED,
+    SCREEN_NOTIFICATION,
+    SCREEN_INCOMING_CALL,
+    SCREEN_CALL_ACTIVE,
+} screen_state_t;
+
+static screen_state_t s_screen = SCREEN_IDLE;
+
+/* ── Status bar state ────────────────────────────────────────────────────── */
+static char s_ble_status[16] = "";
+static char s_hfp_status[16] = "";
+static bool s_is_bricked = false;  /* drives LOCKED/READY label */
+
+/* ── Time state ──────────────────────────────────────────────────────────── */
+typedef struct {
+    uint8_t  hour, min, sec;
+    uint8_t  dow;     /* 0=Sun..6=Sat */
+    uint16_t year;
+    uint8_t  month, day;
+    bool     valid;   /* false until first TIME_SYNC */
+} pager_time_t;
+
+static pager_time_t s_time = {0};
+
+/* ── Content state ───────────────────────────────────────────────────────── */
+typedef struct {
+    bool  active;
+    bool  checked;
+    char  text[TODO_TEXT_LEN + 1];
+} todo_item_t;
+
+static todo_item_t s_todos[MAX_TODOS] = {0};
+static char s_message[MSG_TEXT_LEN + 1] = "";
+
+/* ── Panel handle ────────────────────────────────────────────────────────── */
 static esp_lcd_panel_handle_t s_panel = NULL;
 
-/* Line buffer: one text row = 8 px tall, full width */
-#define CHAR_W   6
-#define CHAR_H   8
-#define COLS     (LCD_W / CHAR_W)   /* 40 chars per row */
-static uint16_t s_line_buf[LCD_W * CHAR_H];
+/* ── Timers ──────────────────────────────────────────────────────────────── */
+static esp_timer_handle_t s_clock_timer = NULL;
+static esp_timer_handle_t s_notif_timer = NULL;
 
-/* ── Helpers ─────────────────────────────────────────────────────────────── */
+/* ── Strip buffer for fills ──────────────────────────────────────────────── */
+static uint16_t s_strip[LCD_W * 16];
 
-/* Draw a single ASCII character at pixel position (px, py) */
-static void draw_char(int px, int py, char c, uint16_t fg, uint16_t bg)
+/* ── Drawing helpers ─────────────────────────────────────────────────────── */
+
+/** Draw a single character at pixel (px, py) with integer scale factor. */
+static void draw_char_scaled(int px, int py, char c, uint16_t fg, uint16_t bg, int scale)
 {
     if (c < 32 || c > 126) c = '?';
     const uint8_t *glyph = font6x8[c - 32];
-    uint16_t buf[CHAR_W * CHAR_H];
-    for (int col = 0; col < CHAR_W; col++) {
-        uint8_t bits = glyph[col];
-        for (int row = 0; row < CHAR_H; row++) {
-            buf[row * CHAR_W + col] = (bits & (1 << row)) ? fg : bg;
+    int w = CHAR_W * scale;
+    int h = CHAR_H * scale;
+
+    /* Clamp to screen bounds */
+    if (px + w > LCD_W) w = LCD_W - px;
+    if (py + h > LCD_H) h = LCD_H - py;
+    if (w <= 0 || h <= 0) return;
+
+    /* Render into strip buffer row by row in scale-row chunks */
+    for (int sy = 0; sy < CHAR_H; sy++) {
+        /* Build one scaled row into s_strip */
+        for (int sx = 0; sx < CHAR_W; sx++) {
+            uint8_t bits = glyph[sx];
+            uint16_t color = (bits & (1 << sy)) ? fg : bg;
+            for (int dx = 0; dx < scale; dx++) {
+                s_strip[sx * scale + dx] = color;
+            }
         }
+        /* Duplicate the row for vertical scaling */
+        for (int dy = 1; dy < scale; dy++) {
+            memcpy(&s_strip[dy * w], s_strip, w * sizeof(uint16_t));
+        }
+        int row_y = py + sy * scale;
+        if (row_y + scale > LCD_H) break;
+        esp_lcd_panel_draw_bitmap(s_panel, px, row_y, px + w, row_y + scale, s_strip);
     }
-    esp_lcd_panel_draw_bitmap(s_panel, px, py, px + CHAR_W, py + CHAR_H, buf);
 }
 
-/* Draw a string starting at character column cx, row cy (in char units) */
-static void draw_str(int cx, int cy, const char *s, uint16_t fg, uint16_t bg)
+/** Draw a string at pixel (px, py) with scale. Returns pixel X after last char. */
+static int draw_str_px(int px, int py, const char *s, uint16_t fg, uint16_t bg, int scale)
 {
-    int x = cx;
-    while (*s && x < COLS) {
-        draw_char(x * CHAR_W, cy * CHAR_H, *s++, fg, bg);
-        x++;
+    int cw = CHAR_W * scale;
+    while (*s) {
+        if (px + cw > LCD_W) break;
+        draw_char_scaled(px, py, *s++, fg, bg, scale);
+        px += cw;
     }
-    /* Blank the rest of the row */
-    while (x < COLS) {
-        draw_char(x * CHAR_W, cy * CHAR_H, ' ', fg, bg);
-        x++;
+    return px;
+}
+
+/** Fill a rectangular region with a solid colour. */
+static void fill_rect(int x, int y, int w, int h, uint16_t color)
+{
+    if (x + w > LCD_W) w = LCD_W - x;
+    if (y + h > LCD_H) h = LCD_H - y;
+    if (w <= 0 || h <= 0) return;
+
+    /* Fill using s_strip in chunks of up to 16 rows */
+    for (int i = 0; i < w * 16 && i < LCD_W * 16; i++) s_strip[i] = color;
+    for (int row = 0; row < h; row += 16) {
+        int rows = (row + 16 <= h) ? 16 : (h - row);
+        esp_lcd_panel_draw_bitmap(s_panel, x, y + row, x + w, y + row + rows, s_strip);
+    }
+}
+
+/** Draw a 1px horizontal line across the full width. */
+static void draw_hline(int y, uint16_t color)
+{
+    for (int i = 0; i < LCD_W; i++) s_strip[i] = color;
+    esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + 1, s_strip);
+}
+
+/** Clear from pixel y to bottom of screen. */
+static void clear_below(int y)
+{
+    if (y < LCD_H) fill_rect(0, y, LCD_W, LCD_H - y, COLOR_BLACK);
+}
+
+/* ── Status bar ──────────────────────────────────────────────────────────── */
+
+static void draw_status_bar(void)
+{
+    /* Clear status bar area */
+    fill_rect(0, STATUS_Y, LCD_W, STATUS_H, COLOR_BLACK);
+
+    /* Left side: BLE and HFP labels */
+    int x = 4;
+    if (s_ble_status[0]) {
+        x = draw_str_px(x, STATUS_Y, s_ble_status, COLOR_CYAN, COLOR_BLACK, 2);
+        x += CHAR_W * 2; /* gap */
+    }
+    if (s_hfp_status[0]) {
+        draw_str_px(x, STATUS_Y, s_hfp_status, COLOR_GREEN, COLOR_BLACK, 2);
+    }
+
+    /* Right side: LOCKED or READY */
+    const char *label = s_is_bricked ? "LOCKED" : "READY";
+    uint16_t color = s_is_bricked ? COLOR_RED : COLOR_GREEN;
+    int label_w = (int)strlen(label) * CHAR_W * 2;
+    draw_str_px(LCD_W - label_w - 4, STATUS_Y, label, color, COLOR_BLACK, 2);
+}
+
+/* ── Day-of-week names ───────────────────────────────────────────────────── */
+static const char *dow_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+static const char *month_names[] = {
+    "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+};
+
+/* ── Idle screen drawing ─────────────────────────────────────────────────── */
+
+static void draw_clock(void)
+{
+    /* Clear clock area */
+    fill_rect(0, CLOCK_Y, LCD_W, CLOCK_H, COLOR_BLACK);
+
+    if (!s_time.valid) {
+        /* No time synced yet — show placeholder */
+        int pw = 7 * CHAR_W * 4; /* "--:--" = 5 chars at 4x */
+        int px = (LCD_W - pw) / 2;
+        draw_str_px(px, CLOCK_Y, "--:--", COLOR_GRAY, COLOR_BLACK, 4);
+        return;
+    }
+
+    /* 12-hour format */
+    int hour12 = s_time.hour % 12;
+    if (hour12 == 0) hour12 = 12;
+    const char *ampm = (s_time.hour < 12) ? "AM" : "PM";
+
+    char clock_str[8];
+    snprintf(clock_str, sizeof(clock_str), "%2d:%02d", hour12, s_time.min);
+
+    /* Centre the clock: "12:45" = 5 chars at 4x = 120px, + gap + "PM" at 2x = 24px */
+    int clock_w = 5 * CHAR_W * 4;  /* 120px */
+    int ampm_w = 2 * CHAR_W * 2;   /* 24px */
+    int gap = CHAR_W * 2;          /* 12px gap */
+    int total = clock_w + gap + ampm_w;
+    int start_x = (LCD_W - total) / 2;
+
+    draw_str_px(start_x, CLOCK_Y, clock_str, COLOR_WHITE, COLOR_BLACK, 4);
+    draw_str_px(start_x + clock_w + gap, AMPM_Y, ampm, COLOR_GRAY, COLOR_BLACK, 2);
+}
+
+static void draw_date(void)
+{
+    fill_rect(0, DATE_Y, LCD_W, DATE_H, COLOR_BLACK);
+
+    if (!s_time.valid) return;
+
+    char date_str[24];
+    const char *dow = (s_time.dow < 7) ? dow_names[s_time.dow] : "???";
+    const char *mon = (s_time.month >= 1 && s_time.month <= 12) ? month_names[s_time.month] : "???";
+    snprintf(date_str, sizeof(date_str), "%s, %s %d", dow, mon, s_time.day);
+
+    int date_w = (int)strlen(date_str) * CHAR_W * 2;
+    int start_x = (LCD_W - date_w) / 2;
+    draw_str_px(start_x, DATE_Y, date_str, COLOR_GRAY, COLOR_BLACK, 2);
+}
+
+static void draw_content(void)
+{
+    /* Clear content area */
+    clear_below(CONTENT_Y);
+
+    int y = CONTENT_Y;
+    int left_margin = 8;
+
+    /* TO-DO items */
+    for (int i = 0; i < MAX_TODOS; i++) {
+        if (!s_todos[i].active) continue;
+        if (y + CONTENT_LINE_H > LCD_H) break;
+
+        char line[48];
+        snprintf(line, sizeof(line), "[%c] %s",
+                 s_todos[i].checked ? 'x' : ' ',
+                 s_todos[i].text);
+        uint16_t color = s_todos[i].checked ? COLOR_GRAY : COLOR_WHITE;
+        draw_str_px(left_margin, y, line, color, COLOR_BLACK, 2);
+        y += CONTENT_LINE_H;
+    }
+
+    /* Custom message */
+    if (s_message[0]) {
+        if (y + CONTENT_LINE_H <= LCD_H) {
+            draw_str_px(left_margin, y, s_message, COLOR_YELLOW, COLOR_BLACK, 2);
+        }
+    }
+}
+
+static void draw_idle_screen(void)
+{
+    /* Clear below status bar */
+    clear_below(DIV1_Y);
+
+    draw_hline(DIV1_Y, COLOR_GRAY);
+    draw_clock();
+    draw_date();
+    draw_hline(DIV2_Y, COLOR_GRAY);
+    draw_content();
+}
+
+/* ── Notification timeout ────────────────────────────────────────────────── */
+
+static void notif_timeout_cb(void *arg)
+{
+    /* Return to idle screen after notification auto-dismisses */
+    if (s_screen == SCREEN_NOTIFICATION) {
+        s_screen = SCREEN_IDLE;
+        draw_idle_screen();
+    }
+}
+
+/* ── Clock tick ──────────────────────────────────────────────────────────── */
+
+static void advance_time(void)
+{
+    if (!s_time.valid) return;
+
+    s_time.sec++;
+    if (s_time.sec < 60) return;
+    s_time.sec = 0;
+    s_time.min++;
+    if (s_time.min < 60) return;
+    s_time.min = 0;
+    s_time.hour++;
+    if (s_time.hour < 24) return;
+    s_time.hour = 0;
+    /* Advance day — simplified, doesn't handle month/year rollover precisely
+     * since we'll get a fresh TIME_SYNC from the app regularly */
+    s_time.dow = (s_time.dow + 1) % 7;
+    s_time.day++;
+}
+
+static void clock_tick_cb(void *arg)
+{
+    advance_time();
+
+    /* Only redraw clock on idle screen */
+    if (s_screen == SCREEN_IDLE) {
+        draw_clock();
+        /* Redraw date at midnight (when hour just rolled to 0 and min/sec are 0) */
+        if (s_time.hour == 0 && s_time.min == 0 && s_time.sec == 0) {
+            draw_date();
+        }
     }
 }
 
@@ -218,85 +489,222 @@ void ui_init(void)
 
     esp_lcd_panel_reset(s_panel);
     esp_lcd_panel_init(s_panel);
-    esp_lcd_panel_invert_color(s_panel, true);  /* ST7789 needs inversion */
+    esp_lcd_panel_invert_color(s_panel, true);
     esp_lcd_panel_set_gap(s_panel, 0, 0);
+
+    /* Landscape rotation: swap X/Y, then mirror X */
+    esp_lcd_panel_swap_xy(s_panel, true);
+    esp_lcd_panel_mirror(s_panel, true, false);
+
     esp_lcd_panel_disp_on_off(s_panel, true);
 
     /* Backlight on */
     gpio_set_direction(LCD_BL, GPIO_MODE_OUTPUT);
     gpio_set_level(LCD_BL, 1);
 
-    ESP_LOGI(TAG, "ST7789 initialised (%dx%d)", LCD_W, LCD_H);
+    /* Clock tick timer — 1 second periodic */
+    esp_timer_create_args_t clock_args = {
+        .callback = clock_tick_cb,
+        .name     = "ui_clock",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&clock_args, &s_clock_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(s_clock_timer, 1000000)); /* 1s */
+
+    /* Notification timeout timer — one-shot, created once, started per notification */
+    esp_timer_create_args_t notif_args = {
+        .callback = notif_timeout_cb,
+        .name     = "ui_notif",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&notif_args, &s_notif_timer));
+
+    ESP_LOGI(TAG, "ST7789 initialised (%dx%d landscape)", LCD_W, LCD_H);
 }
 
 void ui_fill(uint16_t color)
 {
-    /* Fill in strips to avoid a 150 KB single allocation */
-    static uint16_t strip[LCD_W * 16];
-    for (int i = 0; i < LCD_W * 16; i++) strip[i] = color;
+    for (int i = 0; i < LCD_W * 16; i++) s_strip[i] = color;
     for (int y = 0; y < LCD_H; y += 16) {
         int h = (y + 16 <= LCD_H) ? 16 : (LCD_H - y);
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + h, strip);
+        esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + h, s_strip);
     }
 }
 
-void ui_show_status(const char *status)
+void ui_set_status_ble(const char *text)
 {
+    strncpy(s_ble_status, text, sizeof(s_ble_status) - 1);
+    s_ble_status[sizeof(s_ble_status) - 1] = '\0';
+    draw_status_bar();
+}
+
+void ui_set_status_hfp(const char *text)
+{
+    strncpy(s_hfp_status, text, sizeof(s_hfp_status) - 1);
+    s_hfp_status[sizeof(s_hfp_status) - 1] = '\0';
+    draw_status_bar();
+}
+
+void ui_show_idle(void)
+{
+    s_screen = SCREEN_IDLE;
+    s_is_bricked = false;
     ui_fill(COLOR_BLACK);
-    /* Centre the string vertically around row 18 (of 40 rows) */
-    int row = 18;
-    int col = (COLS - (int)strlen(status)) / 2;
-    if (col < 0) col = 0;
-    draw_str(col, row, status, COLOR_WHITE, COLOR_BLACK);
+    draw_status_bar();
+    draw_idle_screen();
+}
+
+void ui_show_bricked(void)
+{
+    s_screen = SCREEN_BRICKED;
+    s_is_bricked = true;
+    ui_fill(COLOR_BLACK);
+    draw_status_bar();
+
+    /* Large "LOCKED" centred below status bar */
+    clear_below(DIV1_Y);
+    draw_hline(DIV1_Y, COLOR_RED);
+
+    const char *msg = "LOCKED";
+    int msg_w = (int)strlen(msg) * CHAR_W * 4;
+    int cx = (LCD_W - msg_w) / 2;
+    int cy = 80;
+    draw_str_px(cx, cy, msg, COLOR_RED, COLOR_BLACK, 4);
+
+    /* Hint text */
+    const char *hint = "Hold button to unbrick";
+    int hw = (int)strlen(hint) * CHAR_W * 2;
+    draw_str_px((LCD_W - hw) / 2, 130, hint, COLOR_GRAY, COLOR_BLACK, 2);
+}
+
+void ui_show_notification(const char *category, const char *title, const char *message)
+{
+    s_screen = SCREEN_NOTIFICATION;
+
+    /* Keep status bar, clear below */
+    clear_below(DIV1_Y);
+    draw_hline(DIV1_Y, COLOR_YELLOW);
+
+    /* Category label at 2x */
+    draw_str_px(8, DIV1_Y + 4, category, COLOR_YELLOW, COLOR_BLACK, 2);
+
+    /* Title at 2x */
+    int title_y = DIV1_Y + 24;
+    draw_str_px(8, title_y, title, COLOR_WHITE, COLOR_BLACK, 2);
+
+    /* Message body at 2x, word-wrapped */
+    int max_chars = (LCD_W - 16) / (CHAR_W * 2);
+    int msg_len = (int)strlen(message);
+    int y = title_y + 24;
+    int pos = 0;
+    char line[54];  /* max_chars + 1 */
+    while (pos < msg_len && y + 16 < LCD_H) {
+        int take = msg_len - pos;
+        if (take > max_chars) take = max_chars;
+        memcpy(line, message + pos, take);
+        line[take] = '\0';
+        draw_str_px(8, y, line, COLOR_WHITE, COLOR_BLACK, 2);
+        y += 18;
+        pos += take;
+    }
+
+    /* Start 8-second auto-dismiss timer */
+    esp_timer_stop(s_notif_timer);  /* safe even if not running */
+    esp_timer_start_once(s_notif_timer, 8000000);  /* 8s */
 }
 
 void ui_show_incoming_call(const char *caller)
 {
-    ui_fill(COLOR_BLACK);
-    draw_str(0, 2,  "INCOMING CALL",   COLOR_GREEN,  COLOR_BLACK);
-    draw_str(0, 3,  "-------------",   COLOR_GREEN,  COLOR_BLACK);
-    if (caller && caller[0]) {
-        draw_str(0, 5, caller,         COLOR_WHITE,  COLOR_BLACK);
-    } else {
-        draw_str(0, 5, "Unknown",      COLOR_WHITE,  COLOR_BLACK);
-    }
-    draw_str(0, 10, "Press button",   COLOR_YELLOW, COLOR_BLACK);
-    draw_str(0, 11, "to answer",      COLOR_YELLOW, COLOR_BLACK);
+    s_screen = SCREEN_INCOMING_CALL;
+
+    /* Stop notification timer if it was running */
+    esp_timer_stop(s_notif_timer);
+
+    /* Keep status bar, clear below */
+    clear_below(DIV1_Y);
+    draw_hline(DIV1_Y, COLOR_GREEN);
+
+    const char *label = "INCOMING CALL";
+    int lw = (int)strlen(label) * CHAR_W * 2;
+    draw_str_px((LCD_W - lw) / 2, DIV1_Y + 8, label, COLOR_GREEN, COLOR_BLACK, 2);
+
+    /* Caller ID */
+    const char *name = (caller && caller[0]) ? caller : "Unknown";
+    int nw = (int)strlen(name) * CHAR_W * 2;
+    draw_str_px((LCD_W - nw) / 2, DIV1_Y + 40, name, COLOR_WHITE, COLOR_BLACK, 2);
+
+    /* Hint */
+    const char *hint = "Press button to answer";
+    int hw = (int)strlen(hint) * CHAR_W * 2;
+    draw_str_px((LCD_W - hw) / 2, DIV1_Y + 80, hint, COLOR_YELLOW, COLOR_BLACK, 2);
 }
 
 void ui_show_call_active(void)
 {
-    ui_fill(COLOR_BLACK);
-    draw_str(0, 8,  "CALL ACTIVE",    COLOR_GREEN,  COLOR_BLACK);
-    draw_str(0, 10, "Press button",   COLOR_YELLOW, COLOR_BLACK);
-    draw_str(0, 11, "to hang up",     COLOR_YELLOW, COLOR_BLACK);
+    s_screen = SCREEN_CALL_ACTIVE;
+
+    esp_timer_stop(s_notif_timer);
+
+    clear_below(DIV1_Y);
+    draw_hline(DIV1_Y, COLOR_GREEN);
+
+    const char *label = "CALL ACTIVE";
+    int lw = (int)strlen(label) * CHAR_W * 2;
+    draw_str_px((LCD_W - lw) / 2, DIV1_Y + 40, label, COLOR_GREEN, COLOR_BLACK, 2);
+
+    const char *hint = "Press button to hang up";
+    int hw = (int)strlen(hint) * CHAR_W * 2;
+    draw_str_px((LCD_W - hw) / 2, DIV1_Y + 80, hint, COLOR_YELLOW, COLOR_BLACK, 2);
 }
 
-void ui_show_notification(const char *category, const char *title,
-                          const char *message)
+/* ── Display data setters ────────────────────────────────────────────────── */
+
+void ui_set_time(uint8_t hour, uint8_t min, uint8_t sec,
+                 uint8_t dow, uint16_t year, uint8_t month, uint8_t day)
 {
-    ui_fill(COLOR_BLACK);
+    s_time.hour  = hour;
+    s_time.min   = min;
+    s_time.sec   = sec;
+    s_time.dow   = dow;
+    s_time.year  = year;
+    s_time.month = month;
+    s_time.day   = day;
+    s_time.valid = true;
 
-    /* Row 0: category label in yellow */
-    draw_str(0, 0, category, COLOR_YELLOW, COLOR_BLACK);
+    ESP_LOGI(TAG, "Time synced: %02d:%02d:%02d %s %s %d %d",
+             hour, min, sec, dow_names[dow % 7],
+             month_names[month <= 12 ? month : 0], day, year);
 
-    /* Divider row 1 */
-    draw_str(0, 1, "----------------------------------------", COLOR_YELLOW, COLOR_BLACK);
-
-    /* Row 2: title in white */
-    draw_str(0, 2, title, COLOR_WHITE, COLOR_BLACK);
-
-    /* Rows 4–9: message body, word-wrap at COLS chars */
-    int msg_len = strlen(message);
-    int row = 4;
-    int pos = 0;
-    char line[COLS + 1];
-    while (pos < msg_len && row < 38) {
-        int take = msg_len - pos;
-        if (take > COLS) take = COLS;
-        memcpy(line, message + pos, take);
-        line[take] = '\0';
-        draw_str(0, row++, line, COLOR_WHITE, COLOR_BLACK);
-        pos += take;
+    if (s_screen == SCREEN_IDLE) {
+        draw_clock();
+        draw_date();
     }
+}
+
+void ui_set_todo(uint8_t index, bool checked, const char *text)
+{
+    if (index >= MAX_TODOS) return;
+    s_todos[index].active  = true;
+    s_todos[index].checked = checked;
+    strncpy(s_todos[index].text, text, TODO_TEXT_LEN);
+    s_todos[index].text[TODO_TEXT_LEN] = '\0';
+
+    if (s_screen == SCREEN_IDLE) draw_content();
+}
+
+void ui_clear_todos(void)
+{
+    memset(s_todos, 0, sizeof(s_todos));
+    if (s_screen == SCREEN_IDLE) draw_content();
+}
+
+void ui_set_message(const char *text)
+{
+    strncpy(s_message, text, MSG_TEXT_LEN);
+    s_message[MSG_TEXT_LEN] = '\0';
+    if (s_screen == SCREEN_IDLE) draw_content();
+}
+
+void ui_clear_message(void)
+{
+    s_message[0] = '\0';
+    if (s_screen == SCREEN_IDLE) draw_content();
 }

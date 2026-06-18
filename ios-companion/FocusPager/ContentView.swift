@@ -9,16 +9,31 @@ struct ContentView: View {
     @EnvironmentObject private var connection: PagerConnection
     @EnvironmentObject private var shield: ShieldManager
 
+    // MARK: Display settings persistence
+
+    @AppStorage("todo_0_text") private var todo0Text = ""
+    @AppStorage("todo_0_checked") private var todo0Checked = false
+    @AppStorage("todo_1_text") private var todo1Text = ""
+    @AppStorage("todo_1_checked") private var todo1Checked = false
+    @AppStorage("todo_2_text") private var todo2Text = ""
+    @AppStorage("todo_2_checked") private var todo2Checked = false
+    @AppStorage("todo_3_text") private var todo3Text = ""
+    @AppStorage("todo_3_checked") private var todo3Checked = false
+    @AppStorage("customMessage") private var customMessage = ""
+
     var body: some View {
         NavigationStack {
-            VStack(spacing: 24) {
-                connectionBanner
-                stateIndicator
-                controls
-                eventLog
-                Spacer(minLength: 0)
+            ScrollView {
+                VStack(spacing: 24) {
+                    connectionBanner
+                    stateIndicator
+                    controls
+                    displaySection
+                    eventLog
+                    Spacer(minLength: 0)
+                }
+                .padding()
             }
-            .padding()
             .navigationTitle("Focus Pager")
         }
     }
@@ -99,6 +114,140 @@ struct ContentView: View {
             .buttonStyle(.bordered)
             .disabled(!connected)
         }
+    }
+
+    // MARK: Display settings
+
+    private var displaySection: some View {
+        let connected = connection.connectionState == .connected
+        return VStack(alignment: .leading, spacing: 16) {
+            Text("Display")
+                .font(.headline)
+
+            // Time sync
+            Button {
+                connection.syncTime()
+            } label: {
+                Label("Sync Time", systemImage: "clock")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.bordered)
+            .disabled(!connected)
+
+            // To-do list
+            VStack(alignment: .leading, spacing: 8) {
+                Text("To-Do List")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                todoRow(index: 0, text: $todo0Text, checked: $todo0Checked)
+                todoRow(index: 1, text: $todo1Text, checked: $todo1Checked)
+                todoRow(index: 2, text: $todo2Text, checked: $todo2Checked)
+                todoRow(index: 3, text: $todo3Text, checked: $todo3Checked)
+
+                HStack(spacing: 12) {
+                    Button("Send All") {
+                        sendAllTodos()
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!connected)
+
+                    Button("Clear All") {
+                        clearAllTodos()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .disabled(!connected)
+                }
+            }
+
+            // Custom message
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Custom Message")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                HStack {
+                    TextField("Message for pager", text: $customMessage)
+                        .textFieldStyle(.roundedBorder)
+
+                    Button {
+                        if customMessage.isEmpty {
+                            connection.clearMessage()
+                        } else {
+                            connection.sendMessage(customMessage)
+                        }
+                    } label: {
+                        Image(systemName: "paperplane.fill")
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!connected)
+
+                    Button {
+                        customMessage = ""
+                        connection.clearMessage()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                    .disabled(!connected)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding()
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color(.secondarySystemBackground))
+        )
+    }
+
+    private func todoRow(index: Int, text: Binding<String>, checked: Binding<Bool>) -> some View {
+        HStack(spacing: 8) {
+            Button {
+                checked.wrappedValue.toggle()
+                if !text.wrappedValue.isEmpty {
+                    connection.sendTodo(
+                        index: UInt8(index),
+                        checked: checked.wrappedValue,
+                        text: text.wrappedValue
+                    )
+                }
+            } label: {
+                Image(systemName: checked.wrappedValue ? "checkmark.square.fill" : "square")
+                    .foregroundStyle(checked.wrappedValue ? .green : .secondary)
+            }
+            .buttonStyle(.plain)
+
+            TextField("Item \(index + 1)", text: text)
+                .textFieldStyle(.roundedBorder)
+        }
+    }
+
+    private func sendAllTodos() {
+        let items: [(String, Bool)] = [
+            (todo0Text, todo0Checked),
+            (todo1Text, todo1Checked),
+            (todo2Text, todo2Checked),
+            (todo3Text, todo3Checked),
+        ]
+        connection.clearTodos()
+        for (i, item) in items.enumerated() {
+            guard !item.0.isEmpty else { continue }
+            connection.sendTodo(index: UInt8(i), checked: item.1, text: item.0)
+        }
+        if !customMessage.isEmpty {
+            connection.sendMessage(customMessage)
+        }
+    }
+
+    private func clearAllTodos() {
+        todo0Text = ""; todo0Checked = false
+        todo1Text = ""; todo1Checked = false
+        todo2Text = ""; todo2Checked = false
+        todo3Text = ""; todo3Checked = false
+        connection.clearTodos()
     }
 
     // MARK: Event log

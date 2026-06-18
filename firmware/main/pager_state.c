@@ -55,9 +55,9 @@ static pager_state_t nvs_load_state(void)
 static void update_display(pager_state_t state)
 {
     if (state == PAGER_BRICKED) {
-        ui_show_status("BRICKED\nHold button\nto unbrick");
+        ui_show_bricked();
     } else {
-        ui_show_status("Ready - send a text!");
+        ui_show_idle();
     }
 }
 

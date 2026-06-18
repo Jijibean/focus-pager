@@ -82,7 +82,7 @@ void app_main(void)
 
     /* Display — up first so user sees boot progress */
     ui_init();
-    ui_show_status("Booting...");
+    ui_set_status_ble("Boot");
     xTaskCreate(led_task, "led", 1024, NULL, 1, NULL);
 
     /* BT controller — BTDM mode: BLE (ANCS + Brick) + Classic BT (HFP) */
@@ -109,7 +109,7 @@ void app_main(void)
     pager_state_set_shortpress_cb(on_short_press);
 
     ESP_LOGI(TAG, "Focus Pager Phase 4 running");
-    ui_show_status("Advertising...");
+    ui_set_status_ble("Adv");
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
