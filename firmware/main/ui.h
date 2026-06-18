@@ -42,3 +42,15 @@ void ui_show_notification(const char *category, const char *title, const char *m
  * Show a status string centred on screen (e.g. "Advertising…").
  */
 void ui_show_status(const char *status);
+
+/**
+ * Show an incoming call screen.
+ * caller — phone number or name (may be empty string if unknown).
+ * Press button to answer is shown as a hint.
+ */
+void ui_show_incoming_call(const char *caller);
+
+/**
+ * Show active call screen with duration hint.
+ */
+void ui_show_call_active(void);

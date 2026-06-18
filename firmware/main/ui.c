@@ -250,6 +250,28 @@ void ui_show_status(const char *status)
     draw_str(col, row, status, COLOR_WHITE, COLOR_BLACK);
 }
 
+void ui_show_incoming_call(const char *caller)
+{
+    ui_fill(COLOR_BLACK);
+    draw_str(0, 2,  "INCOMING CALL",   COLOR_GREEN,  COLOR_BLACK);
+    draw_str(0, 3,  "-------------",   COLOR_GREEN,  COLOR_BLACK);
+    if (caller && caller[0]) {
+        draw_str(0, 5, caller,         COLOR_WHITE,  COLOR_BLACK);
+    } else {
+        draw_str(0, 5, "Unknown",      COLOR_WHITE,  COLOR_BLACK);
+    }
+    draw_str(0, 10, "Press button",   COLOR_YELLOW, COLOR_BLACK);
+    draw_str(0, 11, "to answer",      COLOR_YELLOW, COLOR_BLACK);
+}
+
+void ui_show_call_active(void)
+{
+    ui_fill(COLOR_BLACK);
+    draw_str(0, 8,  "CALL ACTIVE",    COLOR_GREEN,  COLOR_BLACK);
+    draw_str(0, 10, "Press button",   COLOR_YELLOW, COLOR_BLACK);
+    draw_str(0, 11, "to hang up",     COLOR_YELLOW, COLOR_BLACK);
+}
+
 void ui_show_notification(const char *category, const char *title,
                           const char *message)
 {

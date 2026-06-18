@@ -23,8 +23,9 @@
 #define NVS_NS      "pager"       /* NVS namespace */
 #define NVS_KEY     "brick_state"
 
-static unbrick_event_cb_t s_unbrick_cb = NULL;
-static pager_state_t      s_state      = PAGER_UNBRICKED;
+static unbrick_event_cb_t s_unbrick_cb    = NULL;
+static shortpress_cb_t    s_shortpress_cb = NULL;
+static pager_state_t      s_state         = PAGER_UNBRICKED;
 
 /* ── NVS helpers ─────────────────────────────────────────────────────────── */
 
@@ -76,13 +77,18 @@ static void button_task(void *arg)
                 ESP_LOGI(TAG, "Button down");
             }
             if (held_ms >= HOLD_MS && !was_pressed) {
-                /* Held long enough — fire the event exactly once per hold */
+                /* Held long enough — fire unbrick event exactly once per hold */
                 ESP_LOGI(TAG, "Button held %lums — firing unbrick event",
                          (unsigned long)held_ms);
                 was_pressed = true; /* prevent repeat until released */
                 if (s_unbrick_cb) s_unbrick_cb();
             }
         } else {
+            if (held_ms > 0 && held_ms < HOLD_MS && !was_pressed) {
+                /* Released before hold threshold — short press */
+                ESP_LOGI(TAG, "Short press (%lums)", (unsigned long)held_ms);
+                if (s_shortpress_cb) s_shortpress_cb();
+            }
             if (was_pressed || held_ms > 0) {
                 ESP_LOGI(TAG, "Button released after %lums", (unsigned long)held_ms);
             }
@@ -132,4 +138,9 @@ void pager_state_set(pager_state_t state)
 pager_state_t pager_state_get(void)
 {
     return s_state;
+}
+
+void pager_state_set_shortpress_cb(shortpress_cb_t cb)
+{
+    s_shortpress_cb = cb;
 }

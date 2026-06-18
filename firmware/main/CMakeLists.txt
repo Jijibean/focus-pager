@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "ancs_client.c"
         "brick_service.c"
+        "hfp_client.c"
         "pager_state.c"
         "ui.c"
     INCLUDE_DIRS
@@ -13,6 +14,7 @@ idf_component_register(
         esp_common
         esp_lcd
         driver
+        esp_driver_i2s
         mbedtls
         esp_timer
 )

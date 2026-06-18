@@ -18,12 +18,22 @@ typedef enum {
 /* Callback fired when the button is held ≥2s */
 typedef void (*unbrick_event_cb_t)(void);
 
+/* Callback fired on a short press (press + release in < 2s) */
+typedef void (*shortpress_cb_t)(void);
+
 /**
  * Initialise the state machine and button GPIO.
  * Call once after NVS is initialised.
  * @param cb  Called on every valid button hold (may be NULL).
  */
 void pager_state_init(unbrick_event_cb_t cb);
+
+/**
+ * Register a callback for short button presses (< 2s).
+ * Used by Phase 4 to answer / hang up calls.
+ * May be called after pager_state_init().
+ */
+void pager_state_set_shortpress_cb(shortpress_cb_t cb);
 
 /** Set brick state (persisted to NVS, updates display) */
 void pager_state_set(pager_state_t state);
