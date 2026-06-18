@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
@@ -198,6 +199,13 @@ static char s_message[MSG_TEXT_LEN + 1] = "";
 
 /* ── Panel handle ────────────────────────────────────────────────────────── */
 static esp_lcd_panel_handle_t s_panel = NULL;
+
+/* Mutex: serialises all draw calls — esp_timer callbacks and BT callbacks
+ * run on different tasks, so concurrent SPI access must be prevented. */
+static SemaphoreHandle_t s_ui_mutex = NULL;
+
+#define UI_LOCK()   xSemaphoreTakeRecursive(s_ui_mutex, portMAX_DELAY)
+#define UI_UNLOCK() xSemaphoreGiveRecursive(s_ui_mutex)
 
 /* ── Timers ──────────────────────────────────────────────────────────────── */
 static esp_timer_handle_t s_clock_timer = NULL;
@@ -408,11 +416,12 @@ static void draw_idle_screen(void)
 
 static void notif_timeout_cb(void *arg)
 {
-    /* Return to idle screen after notification auto-dismisses */
+    UI_LOCK();
     if (s_screen == SCREEN_NOTIFICATION) {
         s_screen = SCREEN_IDLE;
         draw_idle_screen();
     }
+    UI_UNLOCK();
 }
 
 /* ── Clock tick ──────────────────────────────────────────────────────────── */
@@ -438,6 +447,7 @@ static void advance_time(void)
 
 static void clock_tick_cb(void *arg)
 {
+    UI_LOCK();
     advance_time();
 
     /* Only redraw clock on idle screen */
@@ -448,6 +458,7 @@ static void clock_tick_cb(void *arg)
             draw_date();
         }
     }
+    UI_UNLOCK();
 }
 
 /* ── Public API ──────────────────────────────────────────────────────────── */
@@ -502,6 +513,10 @@ void ui_init(void)
     gpio_set_direction(LCD_BL, GPIO_MODE_OUTPUT);
     gpio_set_level(LCD_BL, 1);
 
+    /* Drawing mutex — must be created before timers start */
+    s_ui_mutex = xSemaphoreCreateRecursiveMutex();
+    assert(s_ui_mutex);
+
     /* Clock tick timer — 1 second periodic */
     esp_timer_create_args_t clock_args = {
         .callback = clock_tick_cb,
@@ -522,38 +537,47 @@ void ui_init(void)
 
 void ui_fill(uint16_t color)
 {
+    UI_LOCK();
     for (int i = 0; i < LCD_W * 16; i++) s_strip[i] = color;
     for (int y = 0; y < LCD_H; y += 16) {
         int h = (y + 16 <= LCD_H) ? 16 : (LCD_H - y);
         esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + h, s_strip);
     }
+    UI_UNLOCK();
 }
 
 void ui_set_status_ble(const char *text)
 {
+    UI_LOCK();
     strncpy(s_ble_status, text, sizeof(s_ble_status) - 1);
     s_ble_status[sizeof(s_ble_status) - 1] = '\0';
     draw_status_bar();
+    UI_UNLOCK();
 }
 
 void ui_set_status_hfp(const char *text)
 {
+    UI_LOCK();
     strncpy(s_hfp_status, text, sizeof(s_hfp_status) - 1);
     s_hfp_status[sizeof(s_hfp_status) - 1] = '\0';
     draw_status_bar();
+    UI_UNLOCK();
 }
 
 void ui_show_idle(void)
 {
+    UI_LOCK();
     s_screen = SCREEN_IDLE;
     s_is_bricked = false;
     ui_fill(COLOR_BLACK);
     draw_status_bar();
     draw_idle_screen();
+    UI_UNLOCK();
 }
 
 void ui_show_bricked(void)
 {
+    UI_LOCK();
     s_screen = SCREEN_BRICKED;
     s_is_bricked = true;
     ui_fill(COLOR_BLACK);
@@ -573,10 +597,12 @@ void ui_show_bricked(void)
     const char *hint = "Hold button to unbrick";
     int hw = (int)strlen(hint) * CHAR_W * 2;
     draw_str_px((LCD_W - hw) / 2, 130, hint, COLOR_GRAY, COLOR_BLACK, 2);
+    UI_UNLOCK();
 }
 
 void ui_show_notification(const char *category, const char *title, const char *message)
 {
+    UI_LOCK();
     s_screen = SCREEN_NOTIFICATION;
 
     /* Keep status bar, clear below */
@@ -609,10 +635,12 @@ void ui_show_notification(const char *category, const char *title, const char *m
     /* Start 8-second auto-dismiss timer */
     esp_timer_stop(s_notif_timer);  /* safe even if not running */
     esp_timer_start_once(s_notif_timer, 8000000);  /* 8s */
+    UI_UNLOCK();
 }
 
 void ui_show_incoming_call(const char *caller)
 {
+    UI_LOCK();
     s_screen = SCREEN_INCOMING_CALL;
 
     /* Stop notification timer if it was running */
@@ -635,10 +663,12 @@ void ui_show_incoming_call(const char *caller)
     const char *hint = "Press button to answer";
     int hw = (int)strlen(hint) * CHAR_W * 2;
     draw_str_px((LCD_W - hw) / 2, DIV1_Y + 80, hint, COLOR_YELLOW, COLOR_BLACK, 2);
+    UI_UNLOCK();
 }
 
 void ui_show_call_active(void)
 {
+    UI_LOCK();
     s_screen = SCREEN_CALL_ACTIVE;
 
     esp_timer_stop(s_notif_timer);
@@ -653,6 +683,7 @@ void ui_show_call_active(void)
     const char *hint = "Press button to hang up";
     int hw = (int)strlen(hint) * CHAR_W * 2;
     draw_str_px((LCD_W - hw) / 2, DIV1_Y + 80, hint, COLOR_YELLOW, COLOR_BLACK, 2);
+    UI_UNLOCK();
 }
 
 /* ── Display data setters ────────────────────────────────────────────────── */
@@ -660,6 +691,7 @@ void ui_show_call_active(void)
 void ui_set_time(uint8_t hour, uint8_t min, uint8_t sec,
                  uint8_t dow, uint16_t year, uint8_t month, uint8_t day)
 {
+    UI_LOCK();
     s_time.hour  = hour;
     s_time.min   = min;
     s_time.sec   = sec;
@@ -677,34 +709,42 @@ void ui_set_time(uint8_t hour, uint8_t min, uint8_t sec,
         draw_clock();
         draw_date();
     }
+    UI_UNLOCK();
 }
 
 void ui_set_todo(uint8_t index, bool checked, const char *text)
 {
     if (index >= MAX_TODOS) return;
+    UI_LOCK();
     s_todos[index].active  = true;
     s_todos[index].checked = checked;
     strncpy(s_todos[index].text, text, TODO_TEXT_LEN);
     s_todos[index].text[TODO_TEXT_LEN] = '\0';
-
     if (s_screen == SCREEN_IDLE) draw_content();
+    UI_UNLOCK();
 }
 
 void ui_clear_todos(void)
 {
+    UI_LOCK();
     memset(s_todos, 0, sizeof(s_todos));
     if (s_screen == SCREEN_IDLE) draw_content();
+    UI_UNLOCK();
 }
 
 void ui_set_message(const char *text)
 {
+    UI_LOCK();
     strncpy(s_message, text, MSG_TEXT_LEN);
     s_message[MSG_TEXT_LEN] = '\0';
     if (s_screen == SCREEN_IDLE) draw_content();
+    UI_UNLOCK();
 }
 
 void ui_clear_message(void)
 {
+    UI_LOCK();
     s_message[0] = '\0';
     if (s_screen == SCREEN_IDLE) draw_content();
+    UI_UNLOCK();
 }
