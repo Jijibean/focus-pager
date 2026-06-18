@@ -58,8 +58,11 @@ enum PagerIdentity {
 
 /// Pre-shared key shared between app and pager.
 ///
-/// Phase 2: hardcoded all-zeros to match the firmware's NVS default.
-/// Phase 5 will provision a random 16-byte key and store it in the Keychain.
+/// Phase 5: random 16-byte key matching the firmware's compiled-in default.
+/// Must stay in sync with `s_psk` in brick_service.c.
 enum PagerSecrets {
-    static let psk: [UInt8] = Array(repeating: 0, count: 16)
+    static let psk: [UInt8] = [
+        0x2E, 0x8F, 0x41, 0xA6, 0xF4, 0xE3, 0x67, 0x69,
+        0xA0, 0x3E, 0x79, 0xC9, 0xF6, 0x6B, 0x0E, 0xB7,
+    ]
 }

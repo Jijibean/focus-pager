@@ -80,16 +80,26 @@ final class PagerConnection: NSObject, ObservableObject {
 
     // MARK: Public commands
 
-    /// App-initiated brick: write Command = forceBrick, raise the shield, and
-    /// optimistically reflect bricked state (the BrickState notify confirms it).
+    /// App-initiated brick: authenticate, then write a signed forceBrick command.
     func forceBrick() {
-        guard let peripheral, let commandChar else {
+        guard let authChar, let commandChar else {
             logEvent("Cannot brick — not connected")
             return
         }
-        shield.activateShield()
-        peripheral.writeValue(Data([BrickCommand.forceBrick.rawValue]), for: commandChar, type: .withResponse)
-        setPagerState(.bricked, reason: "Bricked (command sent)")
+        Task { @MainActor in
+            do {
+                guard let challenge = try await auth.verifyHandshake(authChar: authChar, io: self) else {
+                    logEvent("Auth FAILED — cannot brick")
+                    return
+                }
+                let signed = auth.signCommand(challenge: challenge, command: BrickCommand.forceBrick.rawValue)
+                shield.activateShield()
+                try await write(signed, to: commandChar)
+                setPagerState(.bricked, reason: "Bricked (command sent)")
+            } catch {
+                logEvent("Brick error: \(error.localizedDescription)")
+            }
+        }
     }
 
     /// Manually run the unbrick handshake (also what an UnbrickEvent triggers).
@@ -177,19 +187,18 @@ final class PagerConnection: NSObject, ObservableObject {
         Task { @MainActor in
             defer { unbrickInFlight = false }
             do {
-                let passed = try await auth.verifyHandshake(authChar: authChar, io: self)
-                if passed {
-                    logEvent("Auth passed")
-                    shield.deactivateShield()
-                    // Confirm the unbrick to the pager via Command = sync.
-                    if let peripheral, let commandChar {
-                        peripheral.writeValue(Data([BrickCommand.sync.rawValue]), for: commandChar, type: .withResponse)
-                    }
-                    setPagerState(.unbricked, reason: "Unbricked")
-                } else {
-                    // Mismatch → ignore, stay bricked. Never fail open.
+                guard let challenge = try await auth.verifyHandshake(authChar: authChar, io: self) else {
                     logEvent("Auth FAILED — staying bricked")
+                    return
                 }
+                logEvent("Auth passed")
+                shield.deactivateShield()
+                // Confirm the unbrick to the pager via a signed sync command.
+                if let commandChar {
+                    let signed = auth.signCommand(challenge: challenge, command: BrickCommand.sync.rawValue)
+                    try await write(signed, to: commandChar)
+                }
+                setPagerState(.unbricked, reason: "Unbricked")
             } catch {
                 logEvent("Unbrick handshake error: \(error.localizedDescription)")
             }

@@ -35,15 +35,14 @@ struct AuthService {
         case malformedResponse
     }
 
-    /// 16-byte pre-shared key. Defaults to the shared all-zeros dev PSK.
+    /// 16-byte pre-shared key.
     var psk: [UInt8] = PagerSecrets.psk
 
     /// Runs the challenge-response handshake against the pager.
     ///
-    /// - Returns: `true` when the pager's response matches the locally computed
-    ///   HMAC (auth passed), `false` on mismatch (caller must keep the pager
-    ///   bricked).
-    func verifyHandshake(authChar: CBCharacteristic, io: PeripheralIO) async throws -> Bool {
+    /// - Returns: The 4-byte challenge on success (needed by `signCommand` to
+    ///   authenticate follow-up writes), or `nil` if the pager failed auth.
+    func verifyHandshake(authChar: CBCharacteristic, io: PeripheralIO) async throws -> Data? {
         // 2. Generate a fresh 4-byte random challenge.
         var challenge = Data(count: 4)
         challenge.withUnsafeMutableBytes { raw in
@@ -60,7 +59,19 @@ struct AuthService {
 
         // 5. Independently compute the expected HMAC and compare.
         let expected = Self.hmac4(psk: psk, challenge: challenge)
-        return Self.constantTimeEqual(response, expected)
+        if Self.constantTimeEqual(response, expected) {
+            return challenge
+        }
+        return nil
+    }
+
+    /// Build a signed command: `[cmd, HMAC(PSK, challenge || cmd)[0:4]]`.
+    /// The firmware verifies this before executing the command.
+    func signCommand(challenge: Data, command: UInt8) -> Data {
+        let msg = challenge + Data([command])
+        let key = SymmetricKey(data: Data(psk))
+        let mac = HMAC<SHA256>.authenticationCode(for: msg, using: key)
+        return Data([command]) + Data(mac.prefix(4))
     }
 
     /// HMAC-SHA256(PSK, challenge) truncated to the first 4 bytes — matches the

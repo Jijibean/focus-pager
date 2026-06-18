@@ -78,13 +78,17 @@ static uint8_t s_brick_state_val = 0;
 /* Auth: last challenge written by central, response computed by us */
 static uint8_t s_auth_challenge[4] = {0};
 static uint8_t s_auth_response[4]  = {0};
+static bool    s_challenge_valid   = false;  /* true after Auth write, cleared after Command */
 
-/* ── PSK (stored in NVS, default all-zeros for dev) ──────────────────────── */
+/* ── PSK (stored in NVS, compiled-in default used if NVS is empty) ────────── */
 #define NVS_NS_BRICK  "brick"
 #define NVS_KEY_PSK   "psk"
 #define PSK_LEN       16
 
-static uint8_t s_psk[PSK_LEN] = {0};
+static uint8_t s_psk[PSK_LEN] = {
+    0x2E, 0x8F, 0x41, 0xA6, 0xF4, 0xE3, 0x67, 0x69,
+    0xA0, 0x3E, 0x79, 0xC9, 0xF6, 0x6B, 0x0E, 0xB7,
+};
 
 static void load_psk(void)
 {
@@ -94,11 +98,11 @@ static void load_psk(void)
         nvs_get_blob(h, NVS_KEY_PSK, s_psk, &len);
         nvs_close(h);
     }
-    /* If not set, PSK stays all-zeros (dev default) */
+    /* If NVS has no key, the compiled-in default is used */
 }
 
 /* ── HMAC-SHA256 truncated to 4 bytes ────────────────────────────────────── */
-static void compute_hmac4(const uint8_t *psk, const uint8_t *challenge,
+static void compute_hmac4(const uint8_t *psk, const uint8_t *msg, size_t msg_len,
                           uint8_t out[4])
 {
     uint8_t hmac[32];
@@ -107,7 +111,7 @@ static void compute_hmac4(const uint8_t *psk, const uint8_t *challenge,
     mbedtls_md_init(&ctx);
     mbedtls_md_setup(&ctx, info, 1 /* is_hmac */);
     mbedtls_md_hmac_starts(&ctx, psk, PSK_LEN);
-    mbedtls_md_hmac_update(&ctx, challenge, 4);
+    mbedtls_md_hmac_update(&ctx, msg, msg_len);
     mbedtls_md_hmac_finish(&ctx, hmac);
     mbedtls_md_free(&ctx);
     memcpy(out, hmac, 4);
@@ -265,7 +269,7 @@ static void build_attr_db(void)
         .att_desc = {
             .uuid_length = ESP_UUID_LEN_128,
             .uuid_p      = au_uuid.uuid.uuid128,
-            .perm        = ESP_GATT_PERM_READ | ESP_GATT_PERM_WRITE,
+            .perm        = ESP_GATT_PERM_READ_ENCRYPTED | ESP_GATT_PERM_WRITE_ENCRYPTED,
             .max_length  = 4,
             .length      = 4,
             .value       = s_auth_response,
@@ -284,14 +288,15 @@ static void build_attr_db(void)
             .value       = (uint8_t *)&char_prop_w,
         },
     };
-    /* Command value — manual response so we can act on the write */
+    /* Command value — manual response so we can act on the write.
+     * Phase 5: accepts 5 bytes [cmd, hmac4] and verifies before executing. */
     s_attr_db[IDX_CMD_VAL] = (esp_gatts_attr_db_t){
         .attr_control = {.auto_rsp = ESP_GATT_RSP_BY_APP},
         .att_desc = {
             .uuid_length = ESP_UUID_LEN_128,
             .uuid_p      = cmd_uuid.uuid.uuid128,
-            .perm        = ESP_GATT_PERM_WRITE,
-            .max_length  = 1,
+            .perm        = ESP_GATT_PERM_WRITE_ENCRYPTED,
+            .max_length  = 5,
             .length      = 1,
             .value       = (uint8_t *)&zero1,
         },
@@ -339,6 +344,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
     case ESP_GATTS_DISCONNECT_EVT:
         ESP_LOGI(TAG, "Central disconnected");
         s_conn_id = 0xFFFF;
+        s_challenge_valid = false;
+        memset(s_auth_challenge, 0, 4);
         break;
 
     case ESP_GATTS_READ_EVT: {
@@ -370,7 +377,8 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
         if (h == s_handles[IDX_AUTH_VAL] && len == 4) {
             /* Central wrote a 4-byte challenge — compute HMAC response */
             memcpy(s_auth_challenge, val, 4);
-            compute_hmac4(s_psk, s_auth_challenge, s_auth_response);
+            s_challenge_valid = true;
+            compute_hmac4(s_psk, s_auth_challenge, 4, s_auth_response);
             ESP_LOGI(TAG, "Auth challenge %02x%02x%02x%02x → response %02x%02x%02x%02x",
                      val[0], val[1], val[2], val[3],
                      s_auth_response[0], s_auth_response[1],
@@ -381,9 +389,42 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
                                             ESP_GATT_OK, NULL);
             }
 
-        } else if (h == s_handles[IDX_CMD_VAL] && len == 1) {
+        } else if (h == s_handles[IDX_CMD_VAL] && len == 5) {
+            /* Command = [cmd_byte, hmac4] where hmac4 = HMAC(PSK, challenge||cmd)[0:4] */
             uint8_t cmd = val[0];
-            ESP_LOGI(TAG, "Command received: 0x%02x", cmd);
+
+            if (!s_challenge_valid) {
+                ESP_LOGW(TAG, "Command 0x%02x rejected — no active auth challenge", cmd);
+                if (param->write.need_rsp) {
+                    esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
+                                                param->write.trans_id,
+                                                ESP_GATT_WRITE_NOT_PERMIT, NULL);
+                }
+                break;
+            }
+
+            /* Verify: HMAC(PSK, challenge || cmd)[0:4] */
+            uint8_t msg[5];
+            memcpy(msg, s_auth_challenge, 4);
+            msg[4] = cmd;
+            uint8_t expected[4];
+            compute_hmac4(s_psk, msg, sizeof(msg), expected);
+
+            if (memcmp(&val[1], expected, 4) != 0) {
+                ESP_LOGW(TAG, "Command 0x%02x rejected — HMAC mismatch", cmd);
+                if (param->write.need_rsp) {
+                    esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
+                                                param->write.trans_id,
+                                                ESP_GATT_WRITE_NOT_PERMIT, NULL);
+                }
+                break;
+            }
+
+            /* Challenge consumed — one-time use */
+            s_challenge_valid = false;
+            memset(s_auth_challenge, 0, 4);
+
+            ESP_LOGI(TAG, "Command 0x%02x authenticated OK", cmd);
             if (cmd == 0x01) {
                 /* Force brick */
                 pager_state_set(PAGER_BRICKED);
