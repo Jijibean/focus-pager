@@ -20,6 +20,8 @@
 #define COLOR_YELLOW  0xFFE0
 #define COLOR_GRAY    0x7BEF
 #define COLOR_CYAN    0x07FF
+#define COLOR_DIM     0x39E7   /* ~23% gray — hints, tertiary text */
+#define COLOR_DIMRED  0xA000   /* dim red — bricked state */
 
 /**
  * Initialise SPI bus, ST7789 panel (landscape), and 1-second clock timer.

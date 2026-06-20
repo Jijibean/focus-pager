@@ -43,17 +43,15 @@
 #define CHAR_H   8
 
 /* ── Layout constants (pixel Y) ──────────────────────────────────────────── */
-#define STATUS_Y        0       /* status bar top */
+#define STATUS_Y        2       /* status bar top */
 #define STATUS_H       16       /* 2x scale → 16px */
-#define DIV1_Y         17       /* first divider */
-#define CLOCK_Y        26       /* clock top (4x) */
+#define CLOCK_Y        26       /* clock top (4x) — below status bar + 8px gap */
 #define CLOCK_H        32       /* 4x scale → 32px */
-#define AMPM_Y         38       /* AM/PM baseline (2x), vertically centred with clock */
-#define DATE_Y         62       /* date top (2x) */
+#define AMPM_Y         34       /* AM/PM baseline (2x), upper-centred in clock */
+#define DATE_Y         66       /* date top (2x) — below clock + 8px gap */
 #define DATE_H         16       /* 2x scale → 16px */
-#define DIV2_Y         81       /* second divider */
-#define CONTENT_Y      86       /* content area top */
-#define CONTENT_LINE_H 18       /* spacing between content lines (2x + 2px gap) */
+#define CONTENT_Y      92       /* content area top — below date + 10px gap */
+#define CONTENT_LINE_H 20       /* 2x + 4px gap */
 
 #define MAX_TODOS       4
 #define TODO_TEXT_LEN  32
@@ -276,13 +274,6 @@ static void fill_rect(int x, int y, int w, int h, uint16_t color)
     }
 }
 
-/** Draw a 1px horizontal line across the full width. */
-static void draw_hline(int y, uint16_t color)
-{
-    for (int i = 0; i < LCD_W; i++) s_strip[i] = color;
-    esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + 1, s_strip);
-}
-
 /** Clear from pixel y to bottom of screen. */
 static void clear_below(int y)
 {
@@ -293,24 +284,35 @@ static void clear_below(int y)
 
 static void draw_status_bar(void)
 {
-    /* Clear status bar area */
     fill_rect(0, STATUS_Y, LCD_W, STATUS_H, COLOR_BLACK);
 
-    /* Left side: BLE and HFP labels */
+    /* Left: current time (if synced) */
     int x = 4;
-    if (s_ble_status[0]) {
-        x = draw_str_px(x, STATUS_Y, s_ble_status, COLOR_CYAN, COLOR_BLACK, 2);
-        x += CHAR_W * 2; /* gap */
-    }
-    if (s_hfp_status[0]) {
-        draw_str_px(x, STATUS_Y, s_hfp_status, COLOR_GREEN, COLOR_BLACK, 2);
+    if (s_time.valid) {
+        int hour12 = s_time.hour % 12;
+        if (hour12 == 0) hour12 = 12;
+        const char *ampm = (s_time.hour < 12) ? "AM" : "PM";
+        char t[12];
+        snprintf(t, sizeof(t), "%d:%02d %s", hour12, s_time.min, ampm);
+        x = draw_str_px(x, STATUS_Y, t, COLOR_GRAY, COLOR_BLACK, 2);
+        x += CHAR_W * 2;
     }
 
-    /* Right side: LOCKED or READY */
-    const char *label = s_is_bricked ? "LOCKED" : "READY";
-    uint16_t color = s_is_bricked ? COLOR_RED : COLOR_GREEN;
-    int label_w = (int)strlen(label) * CHAR_W * 2;
-    draw_str_px(LCD_W - label_w - 4, STATUS_Y, label, color, COLOR_BLACK, 2);
+    /* BLE / HFP indicators — very dim, unobtrusive */
+    if (s_ble_status[0]) {
+        x = draw_str_px(x, STATUS_Y, s_ble_status, COLOR_DIM, COLOR_BLACK, 2);
+        x += CHAR_W * 2;
+    }
+    if (s_hfp_status[0]) {
+        draw_str_px(x, STATUS_Y, s_hfp_status, COLOR_DIM, COLOR_BLACK, 2);
+    }
+
+    /* Right: "LOCKED" only when bricked — dim red, no label when unlocked */
+    if (s_is_bricked) {
+        const char *label = "LOCKED";
+        int label_w = (int)strlen(label) * CHAR_W * 2;
+        draw_str_px(LCD_W - label_w - 4, STATUS_Y, label, COLOR_DIMRED, COLOR_BLACK, 2);
+    }
 }
 
 /* ── Day-of-week names ───────────────────────────────────────────────────── */
@@ -324,34 +326,24 @@ static const char *month_names[] = {
 
 static void draw_clock(void)
 {
-    /* Clear clock area */
     fill_rect(0, CLOCK_Y, LCD_W, CLOCK_H, COLOR_BLACK);
 
     if (!s_time.valid) {
-        /* No time synced yet — show placeholder */
-        int pw = 7 * CHAR_W * 4; /* "--:--" = 5 chars at 4x */
-        int px = (LCD_W - pw) / 2;
-        draw_str_px(px, CLOCK_Y, "--:--", COLOR_GRAY, COLOR_BLACK, 4);
+        draw_str_px(12, CLOCK_Y, "--:--", COLOR_DIM, COLOR_BLACK, 4);
         return;
     }
 
-    /* 12-hour format */
+    /* 12-hour format, left-aligned */
     int hour12 = s_time.hour % 12;
     if (hour12 == 0) hour12 = 12;
     const char *ampm = (s_time.hour < 12) ? "AM" : "PM";
 
     char clock_str[8];
-    snprintf(clock_str, sizeof(clock_str), "%2d:%02d", hour12, s_time.min);
+    snprintf(clock_str, sizeof(clock_str), "%d:%02d", hour12, s_time.min);
 
-    /* Centre the clock: "12:45" = 5 chars at 4x = 120px, + gap + "PM" at 2x = 24px */
-    int clock_w = 5 * CHAR_W * 4;  /* 120px */
-    int ampm_w = 2 * CHAR_W * 2;   /* 24px */
-    int gap = CHAR_W * 2;          /* 12px gap */
-    int total = clock_w + gap + ampm_w;
-    int start_x = (LCD_W - total) / 2;
-
-    draw_str_px(start_x, CLOCK_Y, clock_str, COLOR_WHITE, COLOR_BLACK, 4);
-    draw_str_px(start_x + clock_w + gap, AMPM_Y, ampm, COLOR_GRAY, COLOR_BLACK, 2);
+    int x = 12;
+    int clock_end = draw_str_px(x, CLOCK_Y, clock_str, COLOR_WHITE, COLOR_BLACK, 4);
+    draw_str_px(clock_end + CHAR_W * 2, AMPM_Y, ampm, COLOR_GRAY, COLOR_BLACK, 2);
 }
 
 static void draw_date(void)
@@ -395,20 +387,16 @@ static void draw_content(void)
     /* Custom message */
     if (s_message[0]) {
         if (y + CONTENT_LINE_H <= LCD_H) {
-            draw_str_px(left_margin, y, s_message, COLOR_YELLOW, COLOR_BLACK, 2);
+            draw_str_px(left_margin, y, s_message, COLOR_GRAY, COLOR_BLACK, 2);
         }
     }
 }
 
 static void draw_idle_screen(void)
 {
-    /* Clear below status bar */
-    clear_below(DIV1_Y);
-
-    draw_hline(DIV1_Y, COLOR_GRAY);
+    clear_below(STATUS_Y + STATUS_H);
     draw_clock();
     draw_date();
-    draw_hline(DIV2_Y, COLOR_GRAY);
     draw_content();
 }
 
@@ -450,12 +438,15 @@ static void clock_tick_cb(void *arg)
     UI_LOCK();
     advance_time();
 
-    /* Only redraw clock on idle screen */
     if (s_screen == SCREEN_IDLE) {
         draw_clock();
-        /* Redraw date at midnight (when hour just rolled to 0 and min/sec are 0) */
-        if (s_time.hour == 0 && s_time.min == 0 && s_time.sec == 0) {
-            draw_date();
+        if (s_time.sec == 0) {
+            /* Refresh status bar time at every minute boundary */
+            draw_status_bar();
+            /* Refresh date at midnight */
+            if (s_time.hour == 0 && s_time.min == 0) {
+                draw_date();
+            }
         }
     }
     UI_UNLOCK();
@@ -582,21 +573,17 @@ void ui_show_bricked(void)
     s_is_bricked = true;
     ui_fill(COLOR_BLACK);
     draw_status_bar();
+    clear_below(STATUS_Y + STATUS_H);
 
-    /* Large "LOCKED" centred below status bar */
-    clear_below(DIV1_Y);
-    draw_hline(DIV1_Y, COLOR_RED);
+    /* Single dim "locked" — understated, centred */
+    const char *msg = "locked";
+    int msg_w = (int)strlen(msg) * CHAR_W * 3;
+    draw_str_px((LCD_W - msg_w) / 2, 90, msg, COLOR_DIMRED, COLOR_BLACK, 3);
 
-    const char *msg = "LOCKED";
-    int msg_w = (int)strlen(msg) * CHAR_W * 4;
-    int cx = (LCD_W - msg_w) / 2;
-    int cy = 80;
-    draw_str_px(cx, cy, msg, COLOR_RED, COLOR_BLACK, 4);
-
-    /* Hint text */
-    const char *hint = "Hold button to unbrick";
+    /* Minimal hint */
+    const char *hint = "hold to unbrick";
     int hw = (int)strlen(hint) * CHAR_W * 2;
-    draw_str_px((LCD_W - hw) / 2, 130, hint, COLOR_GRAY, COLOR_BLACK, 2);
+    draw_str_px((LCD_W - hw) / 2, 150, hint, COLOR_DIM, COLOR_BLACK, 2);
     UI_UNLOCK();
 }
 
@@ -605,36 +592,34 @@ void ui_show_notification(const char *category, const char *title, const char *m
     UI_LOCK();
     s_screen = SCREEN_NOTIFICATION;
 
-    /* Keep status bar, clear below */
-    clear_below(DIV1_Y);
-    draw_hline(DIV1_Y, COLOR_YELLOW);
+    clear_below(STATUS_Y + STATUS_H);
 
-    /* Category label at 2x */
-    draw_str_px(8, DIV1_Y + 4, category, COLOR_YELLOW, COLOR_BLACK, 2);
+    /* Sender / title — white, prominent */
+    int y = STATUS_Y + STATUS_H + 14;
+    draw_str_px(12, y, title, COLOR_WHITE, COLOR_BLACK, 2);
+    y += 22;
 
-    /* Title at 2x */
-    int title_y = DIV1_Y + 24;
-    draw_str_px(8, title_y, title, COLOR_WHITE, COLOR_BLACK, 2);
+    /* Category — dim gray, small */
+    draw_str_px(12, y, category, COLOR_GRAY, COLOR_BLACK, 2);
+    y += 28;
 
-    /* Message body at 2x, word-wrapped */
-    int max_chars = (LCD_W - 16) / (CHAR_W * 2);
+    /* Message body — gray, word-wrapped */
+    int max_chars = (LCD_W - 24) / (CHAR_W * 2);
     int msg_len = (int)strlen(message);
-    int y = title_y + 24;
     int pos = 0;
-    char line[54];  /* max_chars + 1 */
+    char line[54];
     while (pos < msg_len && y + 16 < LCD_H) {
         int take = msg_len - pos;
         if (take > max_chars) take = max_chars;
         memcpy(line, message + pos, take);
         line[take] = '\0';
-        draw_str_px(8, y, line, COLOR_WHITE, COLOR_BLACK, 2);
-        y += 18;
+        draw_str_px(12, y, line, COLOR_GRAY, COLOR_BLACK, 2);
+        y += 20;
         pos += take;
     }
 
-    /* Start 8-second auto-dismiss timer */
-    esp_timer_stop(s_notif_timer);  /* safe even if not running */
-    esp_timer_start_once(s_notif_timer, 8000000);  /* 8s */
+    esp_timer_stop(s_notif_timer);
+    esp_timer_start_once(s_notif_timer, 8000000);
     UI_UNLOCK();
 }
 
@@ -642,27 +627,24 @@ void ui_show_incoming_call(const char *caller)
 {
     UI_LOCK();
     s_screen = SCREEN_INCOMING_CALL;
-
-    /* Stop notification timer if it was running */
     esp_timer_stop(s_notif_timer);
 
-    /* Keep status bar, clear below */
-    clear_below(DIV1_Y);
-    draw_hline(DIV1_Y, COLOR_GREEN);
+    clear_below(STATUS_Y + STATUS_H);
 
-    const char *label = "INCOMING CALL";
+    /* "incoming call" — small, dim, centred */
+    const char *label = "incoming call";
     int lw = (int)strlen(label) * CHAR_W * 2;
-    draw_str_px((LCD_W - lw) / 2, DIV1_Y + 8, label, COLOR_GREEN, COLOR_BLACK, 2);
+    draw_str_px((LCD_W - lw) / 2, 68, label, COLOR_GRAY, COLOR_BLACK, 2);
 
-    /* Caller ID */
+    /* Caller name — large, white, centred */
     const char *name = (caller && caller[0]) ? caller : "Unknown";
-    int nw = (int)strlen(name) * CHAR_W * 2;
-    draw_str_px((LCD_W - nw) / 2, DIV1_Y + 40, name, COLOR_WHITE, COLOR_BLACK, 2);
+    int nw = (int)strlen(name) * CHAR_W * 3;
+    draw_str_px((LCD_W - nw) / 2, 96, name, COLOR_WHITE, COLOR_BLACK, 3);
 
-    /* Hint */
-    const char *hint = "Press button to answer";
+    /* Hint — very dim */
+    const char *hint = "press to answer";
     int hw = (int)strlen(hint) * CHAR_W * 2;
-    draw_str_px((LCD_W - hw) / 2, DIV1_Y + 80, hint, COLOR_YELLOW, COLOR_BLACK, 2);
+    draw_str_px((LCD_W - hw) / 2, 185, hint, COLOR_DIM, COLOR_BLACK, 2);
     UI_UNLOCK();
 }
 
@@ -670,19 +652,17 @@ void ui_show_call_active(void)
 {
     UI_LOCK();
     s_screen = SCREEN_CALL_ACTIVE;
-
     esp_timer_stop(s_notif_timer);
 
-    clear_below(DIV1_Y);
-    draw_hline(DIV1_Y, COLOR_GREEN);
+    clear_below(STATUS_Y + STATUS_H);
 
-    const char *label = "CALL ACTIVE";
-    int lw = (int)strlen(label) * CHAR_W * 2;
-    draw_str_px((LCD_W - lw) / 2, DIV1_Y + 40, label, COLOR_GREEN, COLOR_BLACK, 2);
+    const char *label = "call active";
+    int lw = (int)strlen(label) * CHAR_W * 3;
+    draw_str_px((LCD_W - lw) / 2, 96, label, COLOR_WHITE, COLOR_BLACK, 3);
 
-    const char *hint = "Press button to hang up";
+    const char *hint = "press to hang up";
     int hw = (int)strlen(hint) * CHAR_W * 2;
-    draw_str_px((LCD_W - hw) / 2, DIV1_Y + 80, hint, COLOR_YELLOW, COLOR_BLACK, 2);
+    draw_str_px((LCD_W - hw) / 2, 170, hint, COLOR_DIM, COLOR_BLACK, 2);
     UI_UNLOCK();
 }
 
