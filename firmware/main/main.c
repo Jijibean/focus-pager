@@ -24,7 +24,7 @@
 #include "ui.h"
 
 #define TAG      "MAIN"
-#define LED_GPIO GPIO_NUM_2
+#define LED_GPIO GPIO_NUM_13   /* moved off GPIO2; GPIO2 is now LCD RST */
 
 /* ── LED blink task ──────────────────────────────────────────────────────── */
 static void led_task(void *arg)

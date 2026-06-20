@@ -5,7 +5,7 @@
  *
  * Pins (set in ui.c):
  *   DIN  → GPIO23   CLK → GPIO18   CS → GPIO5
- *   DC   → GPIO2    RST → GPIO4    BL → GPIO21
+ *   DC   → GPIO4    RST → GPIO2    BL → GPIO21
  */
 
 #include <stdint.h>

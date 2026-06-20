@@ -3,8 +3,8 @@
  *
  * Pin assignments:
  *   DIN (MOSI) → GPIO23    CLK  → GPIO18
- *   CS         → GPIO5     DC   → GPIO2
- *   RST        → GPIO4     BL   → GPIO21
+ *   CS         → GPIO5     DC   → GPIO4
+ *   RST        → GPIO2     BL   → GPIO21
  */
 
 #include "ui.h"
@@ -28,8 +28,8 @@
 #define LCD_MOSI    23
 #define LCD_CLK     18
 #define LCD_CS       5
-#define LCD_DC       2
-#define LCD_RST      4
+#define LCD_DC       4
+#define LCD_RST      2
 #define LCD_BL      21
 
 /* ── Display geometry (landscape) ────────────────────────────────────────── */
