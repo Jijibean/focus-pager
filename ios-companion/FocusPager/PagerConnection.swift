@@ -325,7 +325,7 @@ extension PagerConnection: PeripheralIO {
 
 // MARK: - CBCentralManagerDelegate
 
-extension PagerConnection: CBCentralManagerDelegate {
+extension PagerConnection: @preconcurrency CBCentralManagerDelegate {
 
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         switch central.state {
@@ -395,7 +395,7 @@ extension PagerConnection: CBCentralManagerDelegate {
 
 // MARK: - CBPeripheralDelegate
 
-extension PagerConnection: CBPeripheralDelegate {
+extension PagerConnection: @preconcurrency CBPeripheralDelegate {
 
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         if let error { logEvent("Service discovery error: \(error.localizedDescription)"); return }
