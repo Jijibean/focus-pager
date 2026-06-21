@@ -319,9 +319,9 @@ static void build_attr_db(void)
             .value       = (uint8_t *)&char_prop_w,
         },
     };
-    /* Display Data value — auto-response, parsed in WRITE_EVT */
+    /* Display Data value — manual response so WRITE_EVT fires with data */
     s_attr_db[IDX_DISP_VAL] = (esp_gatts_attr_db_t){
-        .attr_control = {.auto_rsp = ESP_GATT_AUTO_RSP},
+        .attr_control = {.auto_rsp = ESP_GATT_RSP_BY_APP},
         .att_desc = {
             .uuid_length = ESP_UUID_LEN_128,
             .uuid_p      = disp_uuid.uuid.uuid128,
@@ -508,6 +508,11 @@ static void gatts_event_handler(esp_gatts_cb_event_t event,
             default:
                 ESP_LOGW(TAG, "Unknown display opcode 0x%02x", opcode);
                 break;
+            }
+            if (param->write.need_rsp) {
+                esp_ble_gatts_send_response(gatts_if, param->write.conn_id,
+                                            param->write.trans_id,
+                                            ESP_GATT_OK, NULL);
             }
         }
         break;

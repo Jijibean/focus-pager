@@ -19,6 +19,7 @@
 
 #include "ancs_client.h"
 #include "brick_service.h"
+#include "encoder.h"
 #include "hfp_client.h"
 #include "pager_state.h"
 #include "ui.h"
@@ -55,6 +56,20 @@ static void on_notification(const ancs_notification_t *n)
     }
 
     ui_show_notification(ancs_category_name(n->category), n->title, n->message);
+}
+
+/* ── Encoder callbacks ───────────────────────────────────────────────────── */
+
+static void on_encoder_rotate(int delta)
+{
+    ui_navigate(delta);
+}
+
+static void on_encoder_click(void)
+{
+    /* Click returns to the home screen from any notification detail page.
+     * ui_navigate clamps the result to 0 so a large negative is safe. */
+    ui_navigate(-10);
 }
 
 /* ── Button callbacks ────────────────────────────────────────────────────── */
@@ -113,6 +128,9 @@ void app_main(void)
 
     /* HFP Hands-Free + I2S audio */
     hfp_client_init();
+
+    /* Rotary encoder (CLK=GPIO32, DT=GPIO33, SW=GPIO34) */
+    encoder_init(on_encoder_rotate, on_encoder_click);
 
     /* Button + brick state machine */
     pager_state_init(on_unbrick_event);

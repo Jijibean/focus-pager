@@ -79,3 +79,13 @@ void ui_set_message(const char *text);
 
 /** Clear the custom message. */
 void ui_clear_message(void);
+
+/* ── Encoder navigation ─────────────────────────────────────────────────── */
+
+/**
+ * Navigate the notification list.
+ * +1 scrolls to the next (older) notification; -1 scrolls back toward home.
+ * Page 0 is always the home screen; pages 1..N are notification detail views.
+ * No-ops when a call or bricked screen is active.
+ */
+void ui_navigate(int delta);

@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "ancs_client.c"
         "brick_service.c"
+        "encoder.c"
         "hfp_client.c"
         "pager_state.c"
         "ui.c"
