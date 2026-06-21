@@ -36,10 +36,14 @@ CONFIG_BT_GATT_MAX_SR_ATTRIBUTES=64
 # ── Flash / NVS ──────────────────────────────────────────────────────────────
 CONFIG_NVS_ENCRYPTION=n
 
+# ── Flash ─────────────────────────────────────────────────────────────────────
+# ESP32 WROOM has 4MB flash
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
 # ── Partition table ───────────────────────────────────────────────────────────
-# Classic BT + HFP push the binary past 1 MB; use the built-in large-app table
-# which gives the factory partition ~2 MB on a 4 MB flash chip.
-CONFIG_PARTITION_TABLE_SINGLE_APP_LARGE=y
+# Custom 3MB app partition — needed to fit BT + HFP + LVGL Montserrat fonts.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 # Set to INFO for production; DEBUG shows raw GATT bytes.
@@ -52,3 +56,15 @@ CONFIG_FREERTOS_HZ=1000
 # ── Serial ───────────────────────────────────────────────────────────────────
 # 921600 baud so UART output keeps up with BT log volume
 CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
+
+# ── LVGL ─────────────────────────────────────────────────────────────────────
+# Use system malloc (IDF heap) instead of LVGL's 64KB static pool in BSS
+CONFIG_LV_USE_CLIB_MALLOC=y
+
+# Montserrat font sizes used in ui.c
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_48=y

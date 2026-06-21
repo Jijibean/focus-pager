@@ -44,6 +44,16 @@ static void on_notification(const ancs_notification_t *n)
 {
     ESP_LOGI(TAG, "[NOTIF] cat=%-14s title='%s' msg='%s'",
              ancs_category_name(n->category), n->title, n->message);
+
+    /* Incoming call: ANCS title = contact name (saved in Contacts).
+     * Override whatever phone number HFP CLIP delivered earlier. */
+    if (n->category == ANCS_CAT_INCOMING_CALL) {
+        const char *name = n->title[0] ? n->title :
+                           (n->message[0] ? n->message : NULL);
+        ui_show_incoming_call(name);
+        return;
+    }
+
     ui_show_notification(ancs_category_name(n->category), n->title, n->message);
 }
 

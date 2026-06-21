@@ -17,4 +17,6 @@ idf_component_register(
         esp_driver_i2s
         mbedtls
         esp_timer
+        lvgl
+        esp_lvgl_port
 )

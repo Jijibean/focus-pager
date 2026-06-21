@@ -1,5 +1,8 @@
 /**
- * ui.c — ST7789 320x240 landscape display driver using ESP-IDF esp_lcd
+ * ui.c — LVGL-based display driver for Focus Pager
+ *
+ * ST7789 320x240 landscape via esp_lcd + esp_lvgl_port.
+ * All public functions are mutex-safe (lvgl_port_lock/unlock).
  *
  * Pin assignments:
  *   DIN (MOSI) → GPIO23    CLK  → GPIO18
@@ -11,8 +14,8 @@
 
 #include <string.h>
 #include <stdio.h>
+
 #include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
@@ -21,6 +24,10 @@
 #include "esp_lcd_panel_ops.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "esp_system.h"
+
+#include "lvgl.h"
+#include "esp_lvgl_port.h"
 
 #define TAG "UI"
 
@@ -32,131 +39,23 @@
 #define LCD_RST      2
 #define LCD_BL      21
 
-/* ── Display geometry (landscape) ────────────────────────────────────────── */
-#define LCD_W       320
-#define LCD_H       240
-#define LCD_SPI     SPI2_HOST
-#define LCD_HZ      (40 * 1000 * 1000)
+/* ── Display geometry ────────────────────────────────────────────────────── */
+#define LCD_W        320
+#define LCD_H        240
+#define LCD_SPI      SPI2_HOST
+#define LCD_HZ       (40 * 1000 * 1000)
 
-/* ── Font ────────────────────────────────────────────────────────────────── */
-#define CHAR_W   6
-#define CHAR_H   8
+/* ── LVGL draw buffer (double-buffered, 1/10 screen) ─────────────────────── */
+#define DRAW_BUF_LINES  10
 
-/* ── Layout constants (pixel Y) ──────────────────────────────────────────── */
-#define STATUS_Y        2       /* status bar top */
-#define STATUS_H       16       /* 2x scale → 16px */
-#define CLOCK_Y        26       /* clock top (4x) — below status bar + 8px gap */
-#define CLOCK_H        32       /* 4x scale → 32px */
-#define AMPM_Y         34       /* AM/PM baseline (2x), upper-centred in clock */
-#define DATE_Y         66       /* date top (2x) — below clock + 8px gap */
-#define DATE_H         16       /* 2x scale → 16px */
-#define CONTENT_Y      92       /* content area top — below date + 10px gap */
-#define CONTENT_LINE_H 20       /* 2x + 4px gap */
-
-#define MAX_TODOS       4
-#define TODO_TEXT_LEN  32
-#define MSG_TEXT_LEN   64
-
-/* ── Simple 6x8 font (ASCII 32–127) ─────────────────────────────────────── *
- * Column-major, LSB=top row.
- */
-static const uint8_t font6x8[][6] = {
-    {0x00,0x00,0x00,0x00,0x00,0x00}, /* ' ' */
-    {0x00,0x00,0x5F,0x00,0x00,0x00}, /* '!' */
-    {0x00,0x07,0x00,0x07,0x00,0x00}, /* '"' */
-    {0x14,0x7F,0x14,0x7F,0x14,0x00}, /* '#' */
-    {0x24,0x2A,0x7F,0x2A,0x12,0x00}, /* '$' */
-    {0x23,0x13,0x08,0x64,0x62,0x00}, /* '%' */
-    {0x36,0x49,0x55,0x22,0x50,0x00}, /* '&' */
-    {0x00,0x05,0x03,0x00,0x00,0x00}, /* ''' */
-    {0x00,0x1C,0x22,0x41,0x00,0x00}, /* '(' */
-    {0x00,0x41,0x22,0x1C,0x00,0x00}, /* ')' */
-    {0x08,0x2A,0x1C,0x2A,0x08,0x00}, /* '*' */
-    {0x08,0x08,0x3E,0x08,0x08,0x00}, /* '+' */
-    {0x00,0x50,0x30,0x00,0x00,0x00}, /* ',' */
-    {0x08,0x08,0x08,0x08,0x08,0x00}, /* '-' */
-    {0x00,0x60,0x60,0x00,0x00,0x00}, /* '.' */
-    {0x20,0x10,0x08,0x04,0x02,0x00}, /* '/' */
-    {0x3E,0x51,0x49,0x45,0x3E,0x00}, /* '0' */
-    {0x00,0x42,0x7F,0x40,0x00,0x00}, /* '1' */
-    {0x42,0x61,0x51,0x49,0x46,0x00}, /* '2' */
-    {0x21,0x41,0x45,0x4B,0x31,0x00}, /* '3' */
-    {0x18,0x14,0x12,0x7F,0x10,0x00}, /* '4' */
-    {0x27,0x45,0x45,0x45,0x39,0x00}, /* '5' */
-    {0x3C,0x4A,0x49,0x49,0x30,0x00}, /* '6' */
-    {0x01,0x71,0x09,0x05,0x03,0x00}, /* '7' */
-    {0x36,0x49,0x49,0x49,0x36,0x00}, /* '8' */
-    {0x06,0x49,0x49,0x29,0x1E,0x00}, /* '9' */
-    {0x00,0x36,0x36,0x00,0x00,0x00}, /* ':' */
-    {0x00,0x56,0x36,0x00,0x00,0x00}, /* ';' */
-    {0x08,0x14,0x22,0x41,0x00,0x00}, /* '<' */
-    {0x14,0x14,0x14,0x14,0x14,0x00}, /* '=' */
-    {0x00,0x41,0x22,0x14,0x08,0x00}, /* '>' */
-    {0x02,0x01,0x51,0x09,0x06,0x00}, /* '?' */
-    {0x32,0x49,0x79,0x41,0x3E,0x00}, /* '@' */
-    {0x7E,0x11,0x11,0x11,0x7E,0x00}, /* 'A' */
-    {0x7F,0x49,0x49,0x49,0x36,0x00}, /* 'B' */
-    {0x3E,0x41,0x41,0x41,0x22,0x00}, /* 'C' */
-    {0x7F,0x41,0x41,0x22,0x1C,0x00}, /* 'D' */
-    {0x7F,0x49,0x49,0x49,0x41,0x00}, /* 'E' */
-    {0x7F,0x09,0x09,0x09,0x01,0x00}, /* 'F' */
-    {0x3E,0x41,0x49,0x49,0x7A,0x00}, /* 'G' */
-    {0x7F,0x08,0x08,0x08,0x7F,0x00}, /* 'H' */
-    {0x00,0x41,0x7F,0x41,0x00,0x00}, /* 'I' */
-    {0x20,0x40,0x41,0x3F,0x01,0x00}, /* 'J' */
-    {0x7F,0x08,0x14,0x22,0x41,0x00}, /* 'K' */
-    {0x7F,0x40,0x40,0x40,0x40,0x00}, /* 'L' */
-    {0x7F,0x02,0x0C,0x02,0x7F,0x00}, /* 'M' */
-    {0x7F,0x04,0x08,0x10,0x7F,0x00}, /* 'N' */
-    {0x3E,0x41,0x41,0x41,0x3E,0x00}, /* 'O' */
-    {0x7F,0x09,0x09,0x09,0x06,0x00}, /* 'P' */
-    {0x3E,0x41,0x51,0x21,0x5E,0x00}, /* 'Q' */
-    {0x7F,0x09,0x19,0x29,0x46,0x00}, /* 'R' */
-    {0x46,0x49,0x49,0x49,0x31,0x00}, /* 'S' */
-    {0x01,0x01,0x7F,0x01,0x01,0x00}, /* 'T' */
-    {0x3F,0x40,0x40,0x40,0x3F,0x00}, /* 'U' */
-    {0x1F,0x20,0x40,0x20,0x1F,0x00}, /* 'V' */
-    {0x3F,0x40,0x38,0x40,0x3F,0x00}, /* 'W' */
-    {0x63,0x14,0x08,0x14,0x63,0x00}, /* 'X' */
-    {0x07,0x08,0x70,0x08,0x07,0x00}, /* 'Y' */
-    {0x61,0x51,0x49,0x45,0x43,0x00}, /* 'Z' */
-    {0x00,0x7F,0x41,0x41,0x00,0x00}, /* '[' */
-    {0x02,0x04,0x08,0x10,0x20,0x00}, /* '\' */
-    {0x00,0x41,0x41,0x7F,0x00,0x00}, /* ']' */
-    {0x04,0x02,0x01,0x02,0x04,0x00}, /* '^' */
-    {0x40,0x40,0x40,0x40,0x40,0x00}, /* '_' */
-    {0x00,0x01,0x02,0x04,0x00,0x00}, /* '`' */
-    {0x20,0x54,0x54,0x54,0x78,0x00}, /* 'a' */
-    {0x7F,0x48,0x44,0x44,0x38,0x00}, /* 'b' */
-    {0x38,0x44,0x44,0x44,0x20,0x00}, /* 'c' */
-    {0x38,0x44,0x44,0x48,0x7F,0x00}, /* 'd' */
-    {0x38,0x54,0x54,0x54,0x18,0x00}, /* 'e' */
-    {0x08,0x7E,0x09,0x01,0x02,0x00}, /* 'f' */
-    {0x0C,0x52,0x52,0x52,0x3E,0x00}, /* 'g' */
-    {0x7F,0x08,0x04,0x04,0x78,0x00}, /* 'h' */
-    {0x00,0x44,0x7D,0x40,0x00,0x00}, /* 'i' */
-    {0x20,0x40,0x44,0x3D,0x00,0x00}, /* 'j' */
-    {0x7F,0x10,0x28,0x44,0x00,0x00}, /* 'k' */
-    {0x00,0x41,0x7F,0x40,0x00,0x00}, /* 'l' */
-    {0x7C,0x04,0x18,0x04,0x78,0x00}, /* 'm' */
-    {0x7C,0x08,0x04,0x04,0x78,0x00}, /* 'n' */
-    {0x38,0x44,0x44,0x44,0x38,0x00}, /* 'o' */
-    {0x7C,0x14,0x14,0x14,0x08,0x00}, /* 'p' */
-    {0x08,0x14,0x14,0x18,0x7C,0x00}, /* 'q' */
-    {0x7C,0x08,0x04,0x04,0x08,0x00}, /* 'r' */
-    {0x48,0x54,0x54,0x54,0x20,0x00}, /* 's' */
-    {0x04,0x3F,0x44,0x40,0x20,0x00}, /* 't' */
-    {0x3C,0x40,0x40,0x40,0x7C,0x00}, /* 'u' */
-    {0x1C,0x20,0x40,0x20,0x1C,0x00}, /* 'v' */
-    {0x3C,0x40,0x30,0x40,0x3C,0x00}, /* 'w' */
-    {0x44,0x28,0x10,0x28,0x44,0x00}, /* 'x' */
-    {0x0C,0x50,0x50,0x50,0x3C,0x00}, /* 'y' */
-    {0x44,0x64,0x54,0x4C,0x44,0x00}, /* 'z' */
-    {0x00,0x08,0x36,0x41,0x00,0x00}, /* '{' */
-    {0x00,0x00,0x7F,0x00,0x00,0x00}, /* '|' */
-    {0x00,0x41,0x36,0x08,0x00,0x00}, /* '}' */
-    {0x08,0x04,0x08,0x10,0x08,0x00}, /* '~' */
-};
+/* ── Colours (lv_color_hex) ──────────────────────────────────────────────── */
+#define C_WHITE    lv_color_hex(0xFFFFFF)
+#define C_GRAY     lv_color_hex(0x888888)
+#define C_DIM      lv_color_hex(0x444444)
+#define C_BLACK    lv_color_hex(0x000000)
+#define C_DIMRED   lv_color_hex(0x882222)
+#define C_GREEN    lv_color_hex(0x00CC88)  /* call active / incoming accent */
+#define C_ACCENT   lv_color_hex(0x4488FF)  /* general accent / icon tint   */
 
 /* ── Screen state ────────────────────────────────────────────────────────── */
 typedef enum {
@@ -169,305 +68,427 @@ typedef enum {
 
 static screen_state_t s_screen = SCREEN_IDLE;
 
-/* ── Status bar state ────────────────────────────────────────────────────── */
-static char s_ble_status[16] = "";
-static char s_hfp_status[16] = "";
-static bool s_is_bricked = false;  /* drives LOCKED/READY label */
-
 /* ── Time state ──────────────────────────────────────────────────────────── */
 typedef struct {
     uint8_t  hour, min, sec;
-    uint8_t  dow;     /* 0=Sun..6=Sat */
+    uint8_t  dow;
     uint16_t year;
     uint8_t  month, day;
-    bool     valid;   /* false until first TIME_SYNC */
+    bool     valid;
 } pager_time_t;
 
 static pager_time_t s_time = {0};
 
 /* ── Content state ───────────────────────────────────────────────────────── */
+#define MAX_TODOS      4
+#define TODO_TEXT_LEN  32
+#define MSG_TEXT_LEN   64
+
 typedef struct {
-    bool  active;
-    bool  checked;
-    char  text[TODO_TEXT_LEN + 1];
+    bool active;
+    bool checked;
+    char text[TODO_TEXT_LEN + 1];
 } todo_item_t;
 
 static todo_item_t s_todos[MAX_TODOS] = {0};
-static char s_message[MSG_TEXT_LEN + 1] = "";
+static char        s_message[MSG_TEXT_LEN + 1] = "";
 
-/* ── Panel handle ────────────────────────────────────────────────────────── */
-static esp_lcd_panel_handle_t s_panel = NULL;
+/* ── Status state ────────────────────────────────────────────────────────── */
+static char s_ble_status[16] = "";
+static char s_hfp_status[16] = "";
+static bool s_is_bricked = false;
 
-/* Mutex: serialises all draw calls — esp_timer callbacks and BT callbacks
- * run on different tasks, so concurrent SPI access must be prevented. */
-static SemaphoreHandle_t s_ui_mutex = NULL;
+/* ── LVGL display handle ─────────────────────────────────────────────────── */
+static lv_display_t *s_disp = NULL;
 
-#define UI_LOCK()   xSemaphoreTakeRecursive(s_ui_mutex, portMAX_DELAY)
-#define UI_UNLOCK() xSemaphoreGiveRecursive(s_ui_mutex)
+/* ── LVGL screen objects ─────────────────────────────────────────────────── */
 
-/* ── Timers ──────────────────────────────────────────────────────────────── */
-static esp_timer_handle_t s_clock_timer = NULL;
+/* Shared across all screens */
+static lv_obj_t *s_scr_idle   = NULL;
+static lv_obj_t *s_scr_bricked = NULL;
+static lv_obj_t *s_scr_notif  = NULL;
+static lv_obj_t *s_scr_call   = NULL;   /* shared for incoming + active */
+
+/* Idle screen labels */
+static lv_obj_t *s_lbl_status   = NULL;  /* top-left: time + conn state */
+static lv_obj_t *s_lbl_lock     = NULL;  /* top-right: LOCKED */
+static lv_obj_t *s_lbl_clock    = NULL;
+static lv_obj_t *s_lbl_ampm     = NULL;
+static lv_obj_t *s_lbl_date     = NULL;
+static lv_obj_t *s_lbl_todos[MAX_TODOS] = {NULL};
+static lv_obj_t *s_lbl_message  = NULL;
+
+/* Notification screen labels */
+static lv_obj_t *s_notif_icon     = NULL;  /* category icon (LV_SYMBOL_*) */
+static lv_obj_t *s_notif_title    = NULL;
+static lv_obj_t *s_notif_category = NULL;
+static lv_obj_t *s_notif_body     = NULL;
+static lv_obj_t *s_notif_status   = NULL;
+
+/* Call screen labels */
+static lv_obj_t *s_call_icon   = NULL;  /* LV_SYMBOL_CALL, colored */
+static lv_obj_t *s_call_label  = NULL;
+static lv_obj_t *s_call_name   = NULL;
+static lv_obj_t *s_call_hint   = NULL;
+static lv_obj_t *s_call_status = NULL;
+
+/* Bricked screen labels */
+static lv_obj_t *s_lbl_bricked      = NULL;
+static lv_obj_t *s_lbl_bricked_hint = NULL;
+
+/* ── Notification dismiss timer ──────────────────────────────────────────── */
 static esp_timer_handle_t s_notif_timer = NULL;
 
-/* ── Strip buffer for fills ──────────────────────────────────────────────── */
-static uint16_t s_strip[LCD_W * 16];
-
-/* ── Drawing helpers ─────────────────────────────────────────────────────── */
-
-/** Draw a single character at pixel (px, py) with integer scale factor. */
-static void draw_char_scaled(int px, int py, char c, uint16_t fg, uint16_t bg, int scale)
-{
-    if (c < 32 || c > 126) c = '?';
-    const uint8_t *glyph = font6x8[c - 32];
-    int w = CHAR_W * scale;
-    int h = CHAR_H * scale;
-
-    /* Clamp to screen bounds */
-    if (px + w > LCD_W) w = LCD_W - px;
-    if (py + h > LCD_H) h = LCD_H - py;
-    if (w <= 0 || h <= 0) return;
-
-    /* Render into strip buffer row by row in scale-row chunks */
-    for (int sy = 0; sy < CHAR_H; sy++) {
-        /* Build one scaled row into s_strip */
-        for (int sx = 0; sx < CHAR_W; sx++) {
-            uint8_t bits = glyph[sx];
-            uint16_t color = (bits & (1 << sy)) ? fg : bg;
-            for (int dx = 0; dx < scale; dx++) {
-                s_strip[sx * scale + dx] = color;
-            }
-        }
-        /* Duplicate the row for vertical scaling */
-        for (int dy = 1; dy < scale; dy++) {
-            memcpy(&s_strip[dy * w], s_strip, w * sizeof(uint16_t));
-        }
-        int row_y = py + sy * scale;
-        if (row_y + scale > LCD_H) break;
-        esp_lcd_panel_draw_bitmap(s_panel, px, row_y, px + w, row_y + scale, s_strip);
-    }
-}
-
-/** Draw a string at pixel (px, py) with scale. Returns pixel X after last char. */
-static int draw_str_px(int px, int py, const char *s, uint16_t fg, uint16_t bg, int scale)
-{
-    int cw = CHAR_W * scale;
-    while (*s) {
-        if (px + cw > LCD_W) break;
-        draw_char_scaled(px, py, *s++, fg, bg, scale);
-        px += cw;
-    }
-    return px;
-}
-
-/** Fill a rectangular region with a solid colour. */
-static void fill_rect(int x, int y, int w, int h, uint16_t color)
-{
-    if (x + w > LCD_W) w = LCD_W - x;
-    if (y + h > LCD_H) h = LCD_H - y;
-    if (w <= 0 || h <= 0) return;
-
-    /* Fill using s_strip in chunks of up to 16 rows */
-    for (int i = 0; i < w * 16 && i < LCD_W * 16; i++) s_strip[i] = color;
-    for (int row = 0; row < h; row += 16) {
-        int rows = (row + 16 <= h) ? 16 : (h - row);
-        esp_lcd_panel_draw_bitmap(s_panel, x, y + row, x + w, y + row + rows, s_strip);
-    }
-}
-
-/** Clear from pixel y to bottom of screen. */
-static void clear_below(int y)
-{
-    if (y < LCD_H) fill_rect(0, y, LCD_W, LCD_H - y, COLOR_BLACK);
-}
-
-/* ── Status bar ──────────────────────────────────────────────────────────── */
-
-static void draw_status_bar(void)
-{
-    fill_rect(0, STATUS_Y, LCD_W, STATUS_H, COLOR_BLACK);
-
-    /* Left: current time (if synced) */
-    int x = 4;
-    if (s_time.valid) {
-        int hour12 = s_time.hour % 12;
-        if (hour12 == 0) hour12 = 12;
-        const char *ampm = (s_time.hour < 12) ? "AM" : "PM";
-        char t[12];
-        snprintf(t, sizeof(t), "%d:%02d %s", hour12, s_time.min, ampm);
-        x = draw_str_px(x, STATUS_Y, t, COLOR_GRAY, COLOR_BLACK, 2);
-        x += CHAR_W * 2;
-    }
-
-    /* BLE / HFP indicators — very dim, unobtrusive */
-    if (s_ble_status[0]) {
-        x = draw_str_px(x, STATUS_Y, s_ble_status, COLOR_DIM, COLOR_BLACK, 2);
-        x += CHAR_W * 2;
-    }
-    if (s_hfp_status[0]) {
-        draw_str_px(x, STATUS_Y, s_hfp_status, COLOR_DIM, COLOR_BLACK, 2);
-    }
-
-    /* Right: "LOCKED" only when bricked — dim red, no label when unlocked */
-    if (s_is_bricked) {
-        const char *label = "LOCKED";
-        int label_w = (int)strlen(label) * CHAR_W * 2;
-        draw_str_px(LCD_W - label_w - 4, STATUS_Y, label, COLOR_DIMRED, COLOR_BLACK, 2);
-    }
-}
-
-/* ── Day-of-week names ───────────────────────────────────────────────────── */
-static const char *dow_names[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+/* ── Day / month name tables ─────────────────────────────────────────────── */
+static const char *dow_names[]   = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 static const char *month_names[] = {
-    "", "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+    "","Jan","Feb","Mar","Apr","May","Jun",
+    "Jul","Aug","Sep","Oct","Nov","Dec"
 };
 
-/* ── Idle screen drawing ─────────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════════════════
+   Internal helpers
+   ════════════════════════════════════════════════════════════════════════════ */
 
-static void draw_clock(void)
+/* Apply shared screen style: black background, no border, no padding */
+static void style_screen(lv_obj_t *scr)
 {
-    fill_rect(0, CLOCK_Y, LCD_W, CLOCK_H, COLOR_BLACK);
+    lv_obj_set_style_bg_color(scr, C_BLACK, 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(scr, 0, 0);
+    lv_obj_set_style_pad_all(scr, 0, 0);
+}
 
-    if (!s_time.valid) {
-        draw_str_px(12, CLOCK_Y, "--:--", COLOR_DIM, COLOR_BLACK, 4);
-        return;
+/* Create a label with given font, color, and position */
+static lv_obj_t *make_label(lv_obj_t *parent,
+                             const lv_font_t *font,
+                             lv_color_t color,
+                             lv_align_t align,
+                             int x_ofs, int y_ofs,
+                             const char *text)
+{
+    lv_obj_t *lbl = lv_label_create(parent);
+    lv_obj_set_style_text_font(lbl, font, 0);
+    lv_obj_set_style_text_color(lbl, color, 0);
+    lv_obj_set_style_bg_opa(lbl, LV_OPA_TRANSP, 0);
+    lv_obj_align(lbl, align, x_ofs, y_ofs);
+    lv_label_set_text(lbl, text);
+    return lbl;
+}
+
+/* Format and update the status string (time + BT icon + conn state) */
+static void update_status_label(lv_obj_t *lbl)
+{
+    if (!lbl) return;
+    char buf[64] = "";
+    if (s_time.valid) {
+        int h = s_time.hour % 12;
+        if (h == 0) h = 12;
+        const char *ap = (s_time.hour < 12) ? "AM" : "PM";
+        snprintf(buf, sizeof(buf), "%d:%02d %s", h, s_time.min, ap);
     }
-
-    /* 12-hour format, left-aligned */
-    int hour12 = s_time.hour % 12;
-    if (hour12 == 0) hour12 = 12;
-    const char *ampm = (s_time.hour < 12) ? "AM" : "PM";
-
-    char clock_str[8];
-    snprintf(clock_str, sizeof(clock_str), "%d:%02d", hour12, s_time.min);
-
-    int x = 12;
-    int clock_end = draw_str_px(x, CLOCK_Y, clock_str, COLOR_WHITE, COLOR_BLACK, 4);
-    draw_str_px(clock_end + CHAR_W * 2, AMPM_Y, ampm, COLOR_GRAY, COLOR_BLACK, 2);
+    if (s_ble_status[0]) {
+        size_t used = strlen(buf);
+        /* BT symbol glyph instead of raw "BLE" text */
+        snprintf(buf + used, sizeof(buf) - used,
+                 "  " LV_SYMBOL_BLUETOOTH " %s", s_ble_status);
+    }
+    lv_label_set_text(lbl, buf);
 }
 
-static void draw_date(void)
+/* Return the appropriate LVGL symbol for an ANCS category string */
+static const char *category_icon(const char *cat)
 {
-    fill_rect(0, DATE_Y, LCD_W, DATE_H, COLOR_BLACK);
-
-    if (!s_time.valid) return;
-
-    char date_str[24];
-    const char *dow = (s_time.dow < 7) ? dow_names[s_time.dow] : "???";
-    const char *mon = (s_time.month >= 1 && s_time.month <= 12) ? month_names[s_time.month] : "???";
-    snprintf(date_str, sizeof(date_str), "%s, %s %d", dow, mon, s_time.day);
-
-    int date_w = (int)strlen(date_str) * CHAR_W * 2;
-    int start_x = (LCD_W - date_w) / 2;
-    draw_str_px(start_x, DATE_Y, date_str, COLOR_GRAY, COLOR_BLACK, 2);
+    if (!cat) return LV_SYMBOL_BELL;
+    if (strcmp(cat, "IncomingCall") == 0) return LV_SYMBOL_CALL;
+    if (strcmp(cat, "MissedCall")   == 0) return LV_SYMBOL_CALL;
+    if (strcmp(cat, "Voicemail")    == 0) return LV_SYMBOL_VOLUME_MAX;
+    if (strcmp(cat, "Email")        == 0) return LV_SYMBOL_ENVELOPE;
+    if (strcmp(cat, "Social")       == 0) return LV_SYMBOL_BELL;
+    if (strcmp(cat, "Schedule")     == 0) return LV_SYMBOL_OK;
+    if (strcmp(cat, "News")         == 0) return LV_SYMBOL_FILE;
+    if (strcmp(cat, "Location")     == 0) return LV_SYMBOL_GPS;
+    return LV_SYMBOL_BELL;
 }
 
-static void draw_content(void)
+/* Format a raw phone number into (XXX) XXX-XXXX — leaves non-digits intact */
+static void format_phone_number(char *out, size_t outsz, const char *raw)
 {
-    /* Clear content area */
-    clear_below(CONTENT_Y);
+    if (!raw || !raw[0]) { snprintf(out, outsz, "Unknown"); return; }
 
-    int y = CONTENT_Y;
-    int left_margin = 8;
+    /* Strip everything except digits */
+    char digits[16] = "";
+    size_t nd = 0;
+    for (const char *p = raw; *p && nd < sizeof(digits) - 1; p++) {
+        if (*p >= '0' && *p <= '9') digits[nd++] = *p;
+    }
+    digits[nd] = '\0';
 
-    /* TO-DO items */
+    /* Skip leading country code digit if 11 digits and starts with 1 */
+    const char *d = digits;
+    if (nd == 11 && d[0] == '1') { d++; nd = 10; }
+
+    if (nd == 10) {
+        snprintf(out, outsz, "(%c%c%c) %c%c%c-%c%c%c%c",
+                 d[0],d[1],d[2], d[3],d[4],d[5], d[6],d[7],d[8],d[9]);
+    } else {
+        /* Not a standard number — show as-is */
+        snprintf(out, outsz, "%s", raw);
+    }
+}
+
+/* Rebuild the content area (todos + message) on the idle screen */
+static void redraw_content(void)
+{
     for (int i = 0; i < MAX_TODOS; i++) {
-        if (!s_todos[i].active) continue;
-        if (y + CONTENT_LINE_H > LCD_H) break;
-
-        char line[48];
-        snprintf(line, sizeof(line), "[%c] %s",
-                 s_todos[i].checked ? 'x' : ' ',
-                 s_todos[i].text);
-        uint16_t color = s_todos[i].checked ? COLOR_GRAY : COLOR_WHITE;
-        draw_str_px(left_margin, y, line, color, COLOR_BLACK, 2);
-        y += CONTENT_LINE_H;
+        if (!s_lbl_todos[i]) continue;
+        if (s_todos[i].active) {
+            char line[48];
+            snprintf(line, sizeof(line), "%s  %s",
+                     s_todos[i].checked ? LV_SYMBOL_OK : "-",
+                     s_todos[i].text);
+            lv_label_set_text(s_lbl_todos[i], line);
+            lv_obj_set_style_text_color(s_lbl_todos[i],
+                s_todos[i].checked ? C_DIM : C_GRAY, 0);
+            lv_obj_remove_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
+        }
     }
-
-    /* Custom message */
-    if (s_message[0]) {
-        if (y + CONTENT_LINE_H <= LCD_H) {
-            draw_str_px(left_margin, y, s_message, COLOR_GRAY, COLOR_BLACK, 2);
+    if (s_lbl_message) {
+        if (s_message[0]) {
+            lv_label_set_text(s_lbl_message, s_message);
+            lv_obj_remove_flag(s_lbl_message, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_lbl_message, LV_OBJ_FLAG_HIDDEN);
         }
     }
 }
 
-static void draw_idle_screen(void)
+/* ════════════════════════════════════════════════════════════════════════════
+   Screen builders — called once during ui_init
+   ════════════════════════════════════════════════════════════════════════════ */
+
+static void build_idle_screen(void)
 {
-    clear_below(STATUS_Y + STATUS_H);
-    draw_clock();
-    draw_date();
-    draw_content();
+    s_scr_idle = lv_obj_create(NULL);
+    style_screen(s_scr_idle);
+
+    /* Status bar — top left: time/conn, top right: LOCKED */
+    s_lbl_status = make_label(s_scr_idle,
+        &lv_font_montserrat_12, C_GRAY,
+        LV_ALIGN_TOP_LEFT, 10, 8, "");
+
+    s_lbl_lock = make_label(s_scr_idle,
+        &lv_font_montserrat_12, C_DIMRED,
+        LV_ALIGN_TOP_RIGHT, -10, 8, "");
+
+    /* Clock — large, left-aligned */
+    s_lbl_clock = make_label(s_scr_idle,
+        &lv_font_montserrat_48, C_WHITE,
+        LV_ALIGN_TOP_LEFT, 10, 28, "--:--");
+
+    /* AM/PM — small, right of clock, vertically centred */
+    s_lbl_ampm = make_label(s_scr_idle,
+        &lv_font_montserrat_16, C_GRAY,
+        LV_ALIGN_TOP_LEFT, 10 + 48 * 3 + 8, 44, "");
+
+    /* Date — below clock */
+    s_lbl_date = make_label(s_scr_idle,
+        &lv_font_montserrat_14, C_GRAY,
+        LV_ALIGN_TOP_LEFT, 10, 94, "");
+
+    /* Content area — todos + message */
+    int content_y = 118;
+    for (int i = 0; i < MAX_TODOS; i++) {
+        s_lbl_todos[i] = make_label(s_scr_idle,
+            &lv_font_montserrat_14, C_GRAY,
+            LV_ALIGN_TOP_LEFT, 10, content_y + i * 22, "");
+        lv_label_set_long_mode(s_lbl_todos[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(s_lbl_todos[i], LCD_W - 20);
+        lv_obj_add_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    s_lbl_message = make_label(s_scr_idle,
+        &lv_font_montserrat_14, C_GRAY,
+        LV_ALIGN_TOP_LEFT, 10, content_y + MAX_TODOS * 22, "");
+    lv_label_set_long_mode(s_lbl_message, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_message, LCD_W - 20);
+    lv_obj_add_flag(s_lbl_message, LV_OBJ_FLAG_HIDDEN);
 }
 
-/* ── Notification timeout ────────────────────────────────────────────────── */
+static void build_bricked_screen(void)
+{
+    s_scr_bricked = lv_obj_create(NULL);
+    style_screen(s_scr_bricked);
+
+    s_lbl_bricked = make_label(s_scr_bricked,
+        &lv_font_montserrat_32, C_DIMRED,
+        LV_ALIGN_CENTER, 0, -20, "locked");
+
+    s_lbl_bricked_hint = make_label(s_scr_bricked,
+        &lv_font_montserrat_12, C_DIM,
+        LV_ALIGN_CENTER, 0, 24, "hold to unbrick");
+}
+
+static void build_notification_screen(void)
+{
+    s_notif_status = NULL;
+    s_scr_notif = lv_obj_create(NULL);
+    style_screen(s_scr_notif);
+
+    /* Status bar — top left */
+    s_notif_status = make_label(s_scr_notif,
+        &lv_font_montserrat_12, C_GRAY,
+        LV_ALIGN_TOP_LEFT, 10, 8, "");
+
+    /* Category icon — large, accent-coloured, top-left below status bar */
+    s_notif_icon = make_label(s_scr_notif,
+        &lv_font_montserrat_32, C_ACCENT,
+        LV_ALIGN_TOP_LEFT, 10, 30, LV_SYMBOL_BELL);
+
+    /* Category name — small, grey, to the right of the icon */
+    s_notif_category = make_label(s_scr_notif,
+        &lv_font_montserrat_12, C_GRAY,
+        LV_ALIGN_TOP_LEFT, 54, 46, "");
+
+    /* Notification title — white, below icon row */
+    s_notif_title = make_label(s_scr_notif,
+        &lv_font_montserrat_24, C_WHITE,
+        LV_ALIGN_TOP_LEFT, 10, 72, "");
+    lv_label_set_long_mode(s_notif_title, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(s_notif_title, LCD_W - 20);
+
+    /* Message body — grey, wrapping */
+    s_notif_body = make_label(s_scr_notif,
+        &lv_font_montserrat_14, C_GRAY,
+        LV_ALIGN_TOP_LEFT, 10, 104, "");
+    lv_label_set_long_mode(s_notif_body, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_notif_body, LCD_W - 20);
+}
+
+static void build_call_screen(void)
+{
+    s_scr_call = lv_obj_create(NULL);
+    style_screen(s_scr_call);
+
+    /* Status bar */
+    s_call_status = make_label(s_scr_call,
+        &lv_font_montserrat_12, C_GRAY,
+        LV_ALIGN_TOP_LEFT, 10, 8, "");
+
+    /* Phone icon — large, centred, coloured green for incoming */
+    s_call_icon = make_label(s_scr_call,
+        &lv_font_montserrat_48, C_GREEN,
+        LV_ALIGN_CENTER, 0, -60, LV_SYMBOL_CALL);
+    lv_obj_set_style_text_align(s_call_icon, LV_TEXT_ALIGN_CENTER, 0);
+
+    /* "incoming call" / "call active" label — below icon */
+    s_call_label = make_label(s_scr_call,
+        &lv_font_montserrat_12, C_GRAY,
+        LV_ALIGN_CENTER, 0, -8, "incoming call");
+    lv_obj_set_style_text_align(s_call_label, LV_TEXT_ALIGN_CENTER, 0);
+
+    /* Caller name — large white text, centred */
+    s_call_name = make_label(s_scr_call,
+        &lv_font_montserrat_24, C_WHITE,
+        LV_ALIGN_CENTER, 0, 24, "");
+    lv_label_set_long_mode(s_call_name, LV_LABEL_LONG_CLIP);
+    lv_obj_set_width(s_call_name, LCD_W - 20);
+    lv_obj_set_style_text_align(s_call_name, LV_TEXT_ALIGN_CENTER, 0);
+
+    /* Bottom hint */
+    s_call_hint = make_label(s_scr_call,
+        &lv_font_montserrat_12, C_DIM,
+        LV_ALIGN_BOTTOM_MID, 0, -12, "press to answer");
+    lv_obj_set_style_text_align(s_call_hint, LV_TEXT_ALIGN_CENTER, 0);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   Timers
+   ════════════════════════════════════════════════════════════════════════════ */
 
 static void notif_timeout_cb(void *arg)
 {
-    UI_LOCK();
-    if (s_screen == SCREEN_NOTIFICATION) {
-        s_screen = SCREEN_IDLE;
-        draw_idle_screen();
+    if (lvgl_port_lock(0)) {
+        if (s_screen == SCREEN_NOTIFICATION) {
+            s_screen = SCREEN_IDLE;
+            lv_screen_load(s_scr_idle);
+        }
+        lvgl_port_unlock();
     }
-    UI_UNLOCK();
-}
-
-/* ── Clock tick ──────────────────────────────────────────────────────────── */
-
-static void advance_time(void)
-{
-    if (!s_time.valid) return;
-
-    s_time.sec++;
-    if (s_time.sec < 60) return;
-    s_time.sec = 0;
-    s_time.min++;
-    if (s_time.min < 60) return;
-    s_time.min = 0;
-    s_time.hour++;
-    if (s_time.hour < 24) return;
-    s_time.hour = 0;
-    /* Advance day — simplified, doesn't handle month/year rollover precisely
-     * since we'll get a fresh TIME_SYNC from the app regularly */
-    s_time.dow = (s_time.dow + 1) % 7;
-    s_time.day++;
 }
 
 static void clock_tick_cb(void *arg)
 {
-    UI_LOCK();
-    advance_time();
+    if (!s_time.valid) return;
 
-    if (s_screen == SCREEN_IDLE) {
-        draw_clock();
-        if (s_time.sec == 0) {
-            /* Refresh status bar time at every minute boundary */
-            draw_status_bar();
-            /* Refresh date at midnight */
-            if (s_time.hour == 0 && s_time.min == 0) {
-                draw_date();
+    /* Advance time */
+    s_time.sec++;
+    if (s_time.sec >= 60) {
+        s_time.sec = 0;
+        s_time.min++;
+        if (s_time.min >= 60) {
+            s_time.min = 0;
+            s_time.hour++;
+            if (s_time.hour >= 24) {
+                s_time.hour = 0;
+                s_time.dow = (s_time.dow + 1) % 7;
+                s_time.day++;
             }
         }
     }
-    UI_UNLOCK();
+
+    /* Only redraw on idle screen */
+    if (s_screen != SCREEN_IDLE) return;
+    if (!lvgl_port_lock(0)) return;
+
+    /* Update clock label */
+    int h = s_time.hour % 12;
+    if (h == 0) h = 12;
+    char clk[8];
+    snprintf(clk, sizeof(clk), "%d:%02d", h, s_time.min);
+    lv_label_set_text(s_lbl_clock, clk);
+    lv_label_set_text(s_lbl_ampm, s_time.hour < 12 ? "AM" : "PM");
+
+    /* Update status bar time every minute */
+    if (s_time.sec == 0) {
+        update_status_label(s_lbl_status);
+
+        /* Update date at midnight */
+        if (s_time.hour == 0 && s_time.min == 0) {
+            char date[24];
+            const char *dow = (s_time.dow < 7) ? dow_names[s_time.dow] : "???";
+            const char *mon = (s_time.month >= 1 && s_time.month <= 12)
+                              ? month_names[s_time.month] : "???";
+            snprintf(date, sizeof(date), "%s, %s %d", dow, mon, s_time.day);
+            lv_label_set_text(s_lbl_date, date);
+        }
+    }
+
+    lvgl_port_unlock();
 }
 
-/* ── Public API ──────────────────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════════════════
+   Public API
+   ════════════════════════════════════════════════════════════════════════════ */
 
 void ui_init(void)
 {
-    /* SPI bus */
+    ESP_LOGI(TAG, "ui_init start, free heap: %lu", esp_get_free_heap_size());
+
+    /* ── SPI bus ── */
     spi_bus_config_t buscfg = {
         .mosi_io_num     = LCD_MOSI,
         .miso_io_num     = -1,
         .sclk_io_num     = LCD_CLK,
         .quadwp_io_num   = -1,
         .quadhd_io_num   = -1,
-        .max_transfer_sz = LCD_W * LCD_H * 2 + 8,
+        .max_transfer_sz = LCD_W * DRAW_BUF_LINES * 2 + 8,
     };
     ESP_ERROR_CHECK(spi_bus_initialize(LCD_SPI, &buscfg, SPI_DMA_CH_AUTO));
 
-    /* Panel IO (SPI) */
+    /* ── LCD panel IO ── */
     esp_lcd_panel_io_handle_t io;
     esp_lcd_panel_io_spi_config_t io_cfg = {
         .dc_gpio_num       = LCD_DC,
@@ -481,189 +502,211 @@ void ui_init(void)
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi(
         (esp_lcd_spi_bus_handle_t)LCD_SPI, &io_cfg, &io));
 
-    /* ST7789 panel */
+    /* ── ST7789 panel ── */
+    esp_lcd_panel_handle_t panel;
     esp_lcd_panel_dev_config_t panel_cfg = {
         .reset_gpio_num  = LCD_RST,
-        .data_endian     = LCD_RGB_DATA_ENDIAN_BIG,
+        /* Do NOT set LCD_RGB_DATA_ENDIAN_BIG here — the byte swap is handled
+         * by swap_bytes=true in the LVGL port flush path. Setting both would
+         * double-swap and produce wrong colors. */
         .bits_per_pixel  = 16,
     };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io, &panel_cfg, &s_panel));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io, &panel_cfg, &panel));
 
-    esp_lcd_panel_reset(s_panel);
-    esp_lcd_panel_init(s_panel);
-    esp_lcd_panel_invert_color(s_panel, true);
-    esp_lcd_panel_set_gap(s_panel, 0, 0);
-
-    /* Landscape rotation: swap X/Y, then mirror X */
-    esp_lcd_panel_swap_xy(s_panel, true);
-    esp_lcd_panel_mirror(s_panel, true, false);
-
-    esp_lcd_panel_disp_on_off(s_panel, true);
+    esp_lcd_panel_reset(panel);
+    esp_lcd_panel_init(panel);
+    esp_lcd_panel_invert_color(panel, true);
+    esp_lcd_panel_set_gap(panel, 0, 0);
+    /* Do NOT call swap_xy/mirror here — lvgl_port_add_disp calls
+     * lvgl_port_disp_rotation_update() which overwrites any MADCTL we set.
+     * Rotation is declared in disp_cfg.rotation below instead. */
+    esp_lcd_panel_disp_on_off(panel, true);
 
     /* Backlight on */
     gpio_set_direction(LCD_BL, GPIO_MODE_OUTPUT);
     gpio_set_level(LCD_BL, 1);
+    ESP_LOGI(TAG, "Panel init done, free heap: %lu", esp_get_free_heap_size());
 
-    /* Drawing mutex — must be created before timers start */
-    s_ui_mutex = xSemaphoreCreateRecursiveMutex();
-    assert(s_ui_mutex);
+    /* ── esp_lvgl_port init ── */
+    const lvgl_port_cfg_t port_cfg = ESP_LVGL_PORT_INIT_CONFIG();
+    ESP_ERROR_CHECK(lvgl_port_init(&port_cfg));
+    ESP_LOGI(TAG, "lvgl_port_init done, free heap: %lu", esp_get_free_heap_size());
 
-    /* Clock tick timer — 1 second periodic */
-    esp_timer_create_args_t clock_args = {
-        .callback = clock_tick_cb,
-        .name     = "ui_clock",
+    /* ── Register display with LVGL ──
+     * lvgl_port_add_disp calls lvgl_port_disp_rotation_update internally,
+     * which programs swap_xy/mirror into the panel from the values below.
+     * swap_xy=true + mirror_x=true = 90° CW = landscape on this module. */
+    const lvgl_port_display_cfg_t disp_cfg = {
+        .io_handle     = io,
+        .panel_handle  = panel,
+        .buffer_size   = LCD_W * DRAW_BUF_LINES,
+        .double_buffer = false,
+        .hres          = LCD_W,
+        .vres          = LCD_H,
+        .monochrome    = false,
+        .rotation = {
+            .swap_xy  = true,    /* landscape: exchange rows and columns */
+            .mirror_x = true,    /* 90° CW — adjust if image is flipped */
+            .mirror_y = false,
+        },
+        .flags = {
+            .buff_dma    = true,
+            .buff_spiram = false,
+            .swap_bytes  = true,   /* RGB565: LVGL little-endian → ST7789 big-endian */
+        },
     };
-    ESP_ERROR_CHECK(esp_timer_create(&clock_args, &s_clock_timer));
-    ESP_ERROR_CHECK(esp_timer_start_periodic(s_clock_timer, 1000000)); /* 1s */
+    s_disp = lvgl_port_add_disp(&disp_cfg);
+    if (!s_disp) {
+        ESP_LOGE(TAG, "lvgl_port_add_disp FAILED — out of memory?");
+        return;
+    }
+    ESP_LOGI(TAG, "lvgl_port_add_disp OK, free heap: %lu", esp_get_free_heap_size());
 
-    /* Notification timeout timer — one-shot, created once, started per notification */
+    /* ── Build all screens ── */
+    lv_display_set_default(s_disp);
+    if (lvgl_port_lock(0)) {
+        build_idle_screen();
+        build_bricked_screen();
+        build_notification_screen();
+        build_call_screen();
+        lv_screen_load(s_scr_idle);
+        ESP_LOGI(TAG, "Screens built, free heap: %lu", esp_get_free_heap_size());
+        lvgl_port_unlock();
+    } else {
+        ESP_LOGE(TAG, "Failed to acquire LVGL lock for screen build");
+    }
+    /* Trigger initial render outside the lock — the LVGL port task handles flush */
+    lv_refr_now(s_disp);
+
+    /* ── Notification dismiss timer (one-shot) ── */
     esp_timer_create_args_t notif_args = {
         .callback = notif_timeout_cb,
         .name     = "ui_notif",
     };
     ESP_ERROR_CHECK(esp_timer_create(&notif_args, &s_notif_timer));
 
-    ESP_LOGI(TAG, "ST7789 initialised (%dx%d landscape)", LCD_W, LCD_H);
+    /* ── Clock tick timer (1s periodic) ── */
+    esp_timer_handle_t clock_timer;
+    esp_timer_create_args_t clock_args = {
+        .callback = clock_tick_cb,
+        .name     = "ui_clock",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&clock_args, &clock_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(clock_timer, 1000000));
+
+    ESP_LOGI(TAG, "LVGL UI initialised (%dx%d)", LCD_W, LCD_H);
 }
 
+/* ── Stub: kept for API compatibility, LVGL manages its own buffer ───────── */
 void ui_fill(uint16_t color)
 {
-    UI_LOCK();
-    for (int i = 0; i < LCD_W * 16; i++) s_strip[i] = color;
-    for (int y = 0; y < LCD_H; y += 16) {
-        int h = (y + 16 <= LCD_H) ? 16 : (LCD_H - y);
-        esp_lcd_panel_draw_bitmap(s_panel, 0, y, LCD_W, y + h, s_strip);
-    }
-    UI_UNLOCK();
+    /* LVGL redraws entire screen on lv_scr_load — nothing to do here */
+    (void)color;
 }
+
+/* ── Status bar ──────────────────────────────────────────────────────────── */
 
 void ui_set_status_ble(const char *text)
 {
-    UI_LOCK();
     strncpy(s_ble_status, text, sizeof(s_ble_status) - 1);
     s_ble_status[sizeof(s_ble_status) - 1] = '\0';
-    draw_status_bar();
-    UI_UNLOCK();
+    if (lvgl_port_lock(0)) {
+        update_status_label(s_lbl_status);
+        update_status_label(s_notif_status);
+        update_status_label(s_call_status);
+        lvgl_port_unlock();
+    }
 }
 
 void ui_set_status_hfp(const char *text)
 {
-    UI_LOCK();
     strncpy(s_hfp_status, text, sizeof(s_hfp_status) - 1);
     s_hfp_status[sizeof(s_hfp_status) - 1] = '\0';
-    draw_status_bar();
-    UI_UNLOCK();
+    /* HFP status reflected on call screen label elsewhere */
 }
+
+/* ── Screen transitions ──────────────────────────────────────────────────── */
 
 void ui_show_idle(void)
 {
-    UI_LOCK();
+    if (!lvgl_port_lock(0)) return;
     s_screen = SCREEN_IDLE;
     s_is_bricked = false;
-    ui_fill(COLOR_BLACK);
-    draw_status_bar();
-    draw_idle_screen();
-    UI_UNLOCK();
+    lv_label_set_text(s_lbl_lock, "");
+    update_status_label(s_lbl_status);
+    redraw_content();
+    lv_screen_load(s_scr_idle);
+    lvgl_port_unlock();
 }
 
 void ui_show_bricked(void)
 {
-    UI_LOCK();
+    if (!lvgl_port_lock(0)) return;
     s_screen = SCREEN_BRICKED;
     s_is_bricked = true;
-    ui_fill(COLOR_BLACK);
-    draw_status_bar();
-    clear_below(STATUS_Y + STATUS_H);
-
-    /* Single dim "locked" — understated, centred */
-    const char *msg = "locked";
-    int msg_w = (int)strlen(msg) * CHAR_W * 3;
-    draw_str_px((LCD_W - msg_w) / 2, 90, msg, COLOR_DIMRED, COLOR_BLACK, 3);
-
-    /* Minimal hint */
-    const char *hint = "hold to unbrick";
-    int hw = (int)strlen(hint) * CHAR_W * 2;
-    draw_str_px((LCD_W - hw) / 2, 150, hint, COLOR_DIM, COLOR_BLACK, 2);
-    UI_UNLOCK();
+    lv_screen_load(s_scr_bricked);
+    lvgl_port_unlock();
 }
 
 void ui_show_notification(const char *category, const char *title, const char *message)
 {
-    UI_LOCK();
+    if (!lvgl_port_lock(0)) return;
     s_screen = SCREEN_NOTIFICATION;
 
-    clear_below(STATUS_Y + STATUS_H);
+    update_status_label(s_notif_status);
+    lv_label_set_text(s_notif_icon, category_icon(category));
+    lv_obj_set_style_text_color(s_notif_icon, C_ACCENT, 0);
+    lv_label_set_text(s_notif_category, category ? category : "");
+    lv_label_set_text(s_notif_title, title ? title : "");
+    lv_label_set_text(s_notif_body, message ? message : "");
 
-    /* Sender / title — white, prominent */
-    int y = STATUS_Y + STATUS_H + 14;
-    draw_str_px(12, y, title, COLOR_WHITE, COLOR_BLACK, 2);
-    y += 22;
-
-    /* Category — dim gray, small */
-    draw_str_px(12, y, category, COLOR_GRAY, COLOR_BLACK, 2);
-    y += 28;
-
-    /* Message body — gray, word-wrapped */
-    int max_chars = (LCD_W - 24) / (CHAR_W * 2);
-    int msg_len = (int)strlen(message);
-    int pos = 0;
-    char line[54];
-    while (pos < msg_len && y + 16 < LCD_H) {
-        int take = msg_len - pos;
-        if (take > max_chars) take = max_chars;
-        memcpy(line, message + pos, take);
-        line[take] = '\0';
-        draw_str_px(12, y, line, COLOR_GRAY, COLOR_BLACK, 2);
-        y += 20;
-        pos += take;
-    }
+    lv_screen_load(s_scr_notif);
+    lvgl_port_unlock();
 
     esp_timer_stop(s_notif_timer);
     esp_timer_start_once(s_notif_timer, 8000000);
-    UI_UNLOCK();
 }
 
 void ui_show_incoming_call(const char *caller)
 {
-    UI_LOCK();
-    s_screen = SCREEN_INCOMING_CALL;
     esp_timer_stop(s_notif_timer);
+    if (!lvgl_port_lock(0)) return;
+    s_screen = SCREEN_INCOMING_CALL;
 
-    clear_below(STATUS_Y + STATUS_H);
+    /* Format caller: if it looks like digits, pretty-print the number.
+     * If ANCS later provides a contact name it calls us again to override. */
+    char display_name[32];
+    if (caller && caller[0]) {
+        format_phone_number(display_name, sizeof(display_name), caller);
+    } else {
+        snprintf(display_name, sizeof(display_name), "Unknown");
+    }
 
-    /* "incoming call" — small, dim, centred */
-    const char *label = "incoming call";
-    int lw = (int)strlen(label) * CHAR_W * 2;
-    draw_str_px((LCD_W - lw) / 2, 68, label, COLOR_GRAY, COLOR_BLACK, 2);
+    update_status_label(s_call_status);
+    lv_label_set_text(s_call_icon, LV_SYMBOL_CALL);
+    lv_obj_set_style_text_color(s_call_icon, C_GREEN, 0);
+    lv_label_set_text(s_call_label, "incoming call");
+    lv_label_set_text(s_call_name, display_name);
+    lv_label_set_text(s_call_hint, "press to answer");
 
-    /* Caller name — large, white, centred */
-    const char *name = (caller && caller[0]) ? caller : "Unknown";
-    int nw = (int)strlen(name) * CHAR_W * 3;
-    draw_str_px((LCD_W - nw) / 2, 96, name, COLOR_WHITE, COLOR_BLACK, 3);
-
-    /* Hint — very dim */
-    const char *hint = "press to answer";
-    int hw = (int)strlen(hint) * CHAR_W * 2;
-    draw_str_px((LCD_W - hw) / 2, 185, hint, COLOR_DIM, COLOR_BLACK, 2);
-    UI_UNLOCK();
+    lv_screen_load(s_scr_call);
+    lvgl_port_unlock();
 }
 
 void ui_show_call_active(void)
 {
-    UI_LOCK();
-    s_screen = SCREEN_CALL_ACTIVE;
     esp_timer_stop(s_notif_timer);
+    if (!lvgl_port_lock(0)) return;
+    s_screen = SCREEN_CALL_ACTIVE;
 
-    clear_below(STATUS_Y + STATUS_H);
+    update_status_label(s_call_status);
+    lv_label_set_text(s_call_icon, LV_SYMBOL_CALL);
+    lv_obj_set_style_text_color(s_call_icon, C_GRAY, 0);  /* dim when active */
+    lv_label_set_text(s_call_label, "call active");
+    lv_label_set_text(s_call_hint, "press to hang up");
 
-    const char *label = "call active";
-    int lw = (int)strlen(label) * CHAR_W * 3;
-    draw_str_px((LCD_W - lw) / 2, 96, label, COLOR_WHITE, COLOR_BLACK, 3);
-
-    const char *hint = "press to hang up";
-    int hw = (int)strlen(hint) * CHAR_W * 2;
-    draw_str_px((LCD_W - hw) / 2, 170, hint, COLOR_DIM, COLOR_BLACK, 2);
-    UI_UNLOCK();
+    lv_screen_load(s_scr_call);
+    lvgl_port_unlock();
 }
 
 /* ── Display data setters ────────────────────────────────────────────────── */
@@ -671,7 +714,6 @@ void ui_show_call_active(void)
 void ui_set_time(uint8_t hour, uint8_t min, uint8_t sec,
                  uint8_t dow, uint16_t year, uint8_t month, uint8_t day)
 {
-    UI_LOCK();
     s_time.hour  = hour;
     s_time.min   = min;
     s_time.sec   = sec;
@@ -682,49 +724,72 @@ void ui_set_time(uint8_t hour, uint8_t min, uint8_t sec,
     s_time.valid = true;
 
     ESP_LOGI(TAG, "Time synced: %02d:%02d:%02d %s %s %d %d",
-             hour, min, sec, dow_names[dow % 7],
-             month_names[month <= 12 ? month : 0], day, year);
+             hour, min, sec,
+             dow_names[dow % 7],
+             month_names[month <= 12 ? month : 0],
+             day, year);
 
-    if (s_screen == SCREEN_IDLE) {
-        draw_clock();
-        draw_date();
-    }
-    UI_UNLOCK();
+    if (!lvgl_port_lock(0)) return;
+
+    /* Clock */
+    int h = hour % 12;
+    if (h == 0) h = 12;
+    char clk[8];
+    snprintf(clk, sizeof(clk), "%d:%02d", h, min);
+    lv_label_set_text(s_lbl_clock, clk);
+    lv_label_set_text(s_lbl_ampm, hour < 12 ? "AM" : "PM");
+
+    /* Date */
+    char date[24];
+    const char *dow_str = (dow < 7) ? dow_names[dow] : "???";
+    const char *mon_str = (month >= 1 && month <= 12) ? month_names[month] : "???";
+    snprintf(date, sizeof(date), "%s, %s %d", dow_str, mon_str, day);
+    lv_label_set_text(s_lbl_date, date);
+
+    /* Status bar */
+    update_status_label(s_lbl_status);
+
+    lvgl_port_unlock();
 }
 
 void ui_set_todo(uint8_t index, bool checked, const char *text)
 {
     if (index >= MAX_TODOS) return;
-    UI_LOCK();
     s_todos[index].active  = true;
     s_todos[index].checked = checked;
     strncpy(s_todos[index].text, text, TODO_TEXT_LEN);
     s_todos[index].text[TODO_TEXT_LEN] = '\0';
-    if (s_screen == SCREEN_IDLE) draw_content();
-    UI_UNLOCK();
+
+    if (s_screen == SCREEN_IDLE && lvgl_port_lock(0)) {
+        redraw_content();
+        lvgl_port_unlock();
+    }
 }
 
 void ui_clear_todos(void)
 {
-    UI_LOCK();
     memset(s_todos, 0, sizeof(s_todos));
-    if (s_screen == SCREEN_IDLE) draw_content();
-    UI_UNLOCK();
+    if (s_screen == SCREEN_IDLE && lvgl_port_lock(0)) {
+        redraw_content();
+        lvgl_port_unlock();
+    }
 }
 
 void ui_set_message(const char *text)
 {
-    UI_LOCK();
     strncpy(s_message, text, MSG_TEXT_LEN);
     s_message[MSG_TEXT_LEN] = '\0';
-    if (s_screen == SCREEN_IDLE) draw_content();
-    UI_UNLOCK();
+    if (s_screen == SCREEN_IDLE && lvgl_port_lock(0)) {
+        redraw_content();
+        lvgl_port_unlock();
+    }
 }
 
 void ui_clear_message(void)
 {
-    UI_LOCK();
     s_message[0] = '\0';
-    if (s_screen == SCREEN_IDLE) draw_content();
-    UI_UNLOCK();
+    if (s_screen == SCREEN_IDLE && lvgl_port_lock(0)) {
+        redraw_content();
+        lvgl_port_unlock();
+    }
 }
