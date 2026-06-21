@@ -21,6 +21,7 @@
 #include "brick_service.h"
 #include "encoder.h"
 #include "hfp_client.h"
+#include "notif_store.h"
 #include "pager_state.h"
 #include "ui.h"
 
@@ -28,15 +29,17 @@
 #define LED_GPIO GPIO_NUM_13   /* moved off GPIO2; GPIO2 is now LCD RST */
 
 /* ── LED blink task ──────────────────────────────────────────────────────── */
+/* Fast blink (60ms) when there are unread notifications, slow (600ms) when idle. */
 static void led_task(void *arg)
 {
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
     while (1) {
+        int period = ui_has_unread() ? 60 : 600;
         gpio_set_level(LED_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(period));
         gpio_set_level(LED_GPIO, 0);
-        vTaskDelay(pdMS_TO_TICKS(200));
+        vTaskDelay(pdMS_TO_TICKS(period));
     }
 }
 
@@ -67,9 +70,8 @@ static void on_encoder_rotate(int delta)
 
 static void on_encoder_click(void)
 {
-    /* Click returns to the home screen from any notification detail page.
-     * ui_navigate clamps the result to 0 so a large negative is safe. */
-    ui_navigate(-10);
+    /* Context-aware click: drill into thread detail, back out, or go home. */
+    ui_encoder_click();
 }
 
 /* ── Button callbacks ────────────────────────────────────────────────────── */
@@ -104,6 +106,9 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+
+    /* Notification thread store — load from NVS before UI reads it */
+    notif_store_init();
 
     /* Display — up first so user sees boot progress */
     ui_init();

@@ -83,9 +83,23 @@ void ui_clear_message(void);
 /* ── Encoder navigation ─────────────────────────────────────────────────── */
 
 /**
- * Navigate the notification list.
- * +1 scrolls to the next (older) notification; -1 scrolls back toward home.
- * Page 0 is always the home screen; pages 1..N are notification detail views.
- * No-ops when a call or bricked screen is active.
+ * Navigate the notification thread list.
+ * +1 scrolls to the next (older) thread; -1 scrolls back toward home.
+ * Page 0 is always the home screen; pages 1..N are thread detail views.
+ * No-ops when a call, bricked, or thread-detail screen is active.
  */
 void ui_navigate(int delta);
+
+/**
+ * Context-aware encoder click:
+ *   - On thread list → drill into thread detail
+ *   - On thread detail → back to thread list
+ *   - Otherwise → return home
+ */
+void ui_encoder_click(void);
+
+/**
+ * Returns true when the notification thread store has at least one entry.
+ * Used by the LED task to signal unread state.
+ */
+bool ui_has_unread(void);

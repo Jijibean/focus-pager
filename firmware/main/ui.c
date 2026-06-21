@@ -11,15 +11,19 @@
  *
  * Screen / page model:
  *   Page 0            — home screen  (clock right, todos left)
- *   Pages 1 .. N      — notification detail view (one per history entry)
+ *   Pages 1 .. N      — notification thread list (2 per page)
+ *   Thread detail     — full message history for one sender
  *   Call / Bricked    — override screens, navigation suspended
  *
- * Encoder navigation (see ui_navigate):
- *   Turn CW  → page + 1  (older notifications)
+ * Encoder navigation (see ui_navigate / ui_encoder_click):
+ *   Turn CW  → page + 1  (older threads)
  *   Turn CCW → page - 1  (back toward home)
+ *   Click on thread card → thread detail view
+ *   Click in thread detail → back to thread list
  */
 
 #include "ui.h"
+#include "notif_store.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -81,6 +85,7 @@
 #define CLOCK_X_OFS    (COL_W / 2)      /* 80 — offset for LV_ALIGN_TOP_MID */
 #define CLOCK_Y         86              /* top of clock label */
 #define DATE_Y         132              /* top of date label */
+#define HINT_Y         178              /* scroll hint below date */
 
 /* Notification detail — two half-cards stacked vertically */
 #define DETAIL_MARGIN       4
@@ -97,6 +102,14 @@
 /* Title width (leaves 58px for timestamp on right) */
 #define DETAIL_TITLE_W     (DETAIL_BODY_W - 18 - 58)
 
+/* Thread detail — header + content area */
+#define TD_HEADER_Y    (STATUS_H + 4)   /* header row top */
+#define TD_DIVIDER_Y   (STATUS_H + 20)  /* horizontal divider */
+#define TD_CONTENT_Y   (TD_DIVIDER_Y + 2)
+#define TD_CONTENT_H   (LCD_H - TD_CONTENT_Y)
+/* Buffer for formatted message history (newest-first) */
+#define TD_BUF_SIZE    (NS_MAX_MSG_PER_THREAD * (NS_TS_LEN + NS_MSG_LEN + 8))
+
 /* ── Screen state ────────────────────────────────────────────────────────── */
 typedef enum {
     SCREEN_IDLE,
@@ -104,10 +117,11 @@ typedef enum {
     SCREEN_INCOMING_CALL,
     SCREEN_CALL_ACTIVE,
     SCREEN_NOTIF_DETAIL,
+    SCREEN_THREAD_DETAIL,
 } screen_state_t;
 
 static screen_state_t s_screen = SCREEN_IDLE;
-static int            s_current_page = 0;  /* 0 = home, 1..N = notif detail */
+static int            s_current_page = 0;  /* 0 = home, 1..N = thread list page */
 
 /* ── Time state ──────────────────────────────────────────────────────────── */
 typedef struct {
@@ -129,15 +143,18 @@ static lv_display_t *s_disp = NULL;
 /* ── LVGL screen objects ─────────────────────────────────────────────────── */
 
 /* Screens */
-static lv_obj_t *s_scr_idle         = NULL;
-static lv_obj_t *s_scr_bricked      = NULL;
-static lv_obj_t *s_scr_call         = NULL;
-static lv_obj_t *s_scr_notif_detail = NULL;
+static lv_obj_t *s_scr_idle          = NULL;
+static lv_obj_t *s_scr_bricked       = NULL;
+static lv_obj_t *s_scr_call          = NULL;
+static lv_obj_t *s_scr_notif_detail  = NULL;
+static lv_obj_t *s_scr_thread_detail = NULL;
 
 /* Home screen */
 static lv_obj_t *s_lbl_status     = NULL;   /* status bar */
 static lv_obj_t *s_lbl_clock      = NULL;   /* "10:34 AM" in right col */
 static lv_obj_t *s_lbl_clock_date = NULL;   /* "Sat Jun 21" below clock */
+static lv_obj_t *s_lbl_hint       = NULL;   /* pulsing scroll hint */
+static bool      s_hint_on        = false;  /* current pulse state */
 
 /* Todo list — up to MAX_TODOS items in left column */
 #define MAX_TODOS     5
@@ -145,23 +162,6 @@ static lv_obj_t *s_lbl_clock_date = NULL;   /* "Sat Jun 21" below clock */
 typedef struct { bool active; bool checked; char text[TODO_TEXT_LEN + 1]; } todo_item_t;
 static todo_item_t  s_todos[MAX_TODOS];
 static lv_obj_t    *s_lbl_todos[MAX_TODOS];
-
-/* Notification history — newest at index 0 */
-#define MAX_NOTIFS    5
-#define NOTIF_CAT_LEN 20
-#define NOTIF_TTL_LEN 48
-#define NOTIF_MSG_LEN 120
-#define NOTIF_TS_LEN  12
-
-typedef struct {
-    char cat[NOTIF_CAT_LEN];
-    char title[NOTIF_TTL_LEN];
-    char message[NOTIF_MSG_LEN];
-    char timestamp[NOTIF_TS_LEN];
-} notif_item_t;
-
-static notif_item_t s_notif_hist[MAX_NOTIFS];
-static int          s_notif_count = 0;
 
 /* Notification detail screen — two scrollable half-cards */
 static lv_obj_t *s_detail_status    = NULL;   /* status bar left  */
@@ -171,6 +171,13 @@ static lv_obj_t *s_card_icon[2]     = {NULL, NULL};
 static lv_obj_t *s_card_title[2]    = {NULL, NULL};
 static lv_obj_t *s_card_ts[2]       = {NULL, NULL};
 static lv_obj_t *s_card_body[2]     = {NULL, NULL};
+
+/* Thread detail screen */
+static lv_obj_t *s_td_status  = NULL;  /* status bar */
+static lv_obj_t *s_td_back    = NULL;  /* "< back" hint */
+static lv_obj_t *s_td_sender  = NULL;  /* sender name header */
+static lv_obj_t *s_td_icon    = NULL;  /* category icon */
+static lv_obj_t *s_td_content = NULL;  /* message history label */
 
 /* Call screen */
 static lv_obj_t *s_call_icon   = NULL;
@@ -426,6 +433,13 @@ static void build_idle_screen(void)
         &lv_font_montserrat_12, C_GRAY,
         LV_ALIGN_TOP_MID, CLOCK_X_OFS, DATE_Y, "");
     lv_obj_set_style_text_align(s_lbl_clock_date, LV_TEXT_ALIGN_CENTER, 0);
+
+    /* ── Scroll hint — pulses when notifications are waiting ── */
+    s_lbl_hint = make_label(s_scr_idle,
+        &lv_font_montserrat_14, C_ACCENT,
+        LV_ALIGN_TOP_MID, CLOCK_X_OFS, HINT_Y, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_align(s_lbl_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_half_card(int ci, int y)
@@ -493,6 +507,57 @@ static void build_notif_detail_screen(void)
     build_half_card(1, DETAIL_CARD1_Y);
 }
 
+static void build_thread_detail_screen(void)
+{
+    s_scr_thread_detail = lv_obj_create(NULL);
+    style_screen(s_scr_thread_detail);
+
+    /* Status bar */
+    s_td_status = make_label(s_scr_thread_detail,
+        &lv_font_montserrat_12, C_GRAY,
+        LV_ALIGN_TOP_LEFT, H_PAD, 4, "");
+
+    /* Header row */
+    s_td_back = make_label(s_scr_thread_detail,
+        &lv_font_montserrat_12, C_ACCENT,
+        LV_ALIGN_TOP_LEFT, H_PAD, TD_HEADER_Y,
+        LV_SYMBOL_LEFT " back");
+
+    s_td_icon = make_label(s_scr_thread_detail,
+        &lv_font_montserrat_14, C_ACCENT,
+        LV_ALIGN_TOP_RIGHT, -H_PAD, TD_HEADER_Y, LV_SYMBOL_BELL);
+
+    s_td_sender = lv_label_create(s_scr_thread_detail);
+    lv_obj_set_style_text_font(s_td_sender, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_td_sender, C_WHITE, 0);
+    lv_obj_set_style_bg_opa(s_td_sender, LV_OPA_TRANSP, 0);
+    lv_obj_align(s_td_sender, LV_ALIGN_TOP_MID, 0, TD_HEADER_Y);
+    lv_obj_set_width(s_td_sender, LCD_W - 110);
+    lv_label_set_long_mode(s_td_sender, LV_LABEL_LONG_CLIP);
+    lv_obj_set_style_text_align(s_td_sender, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(s_td_sender, "");
+
+    /* Horizontal divider below header */
+    lv_obj_t *hdiv = lv_obj_create(s_scr_thread_detail);
+    lv_obj_set_pos(hdiv, 0, TD_DIVIDER_Y);
+    lv_obj_set_size(hdiv, LCD_W, 1);
+    lv_obj_set_style_bg_color(hdiv, C_DIM, 0);
+    lv_obj_set_style_bg_opa(hdiv, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(hdiv, 0, 0);
+    lv_obj_set_style_pad_all(hdiv, 0, 0);
+    lv_obj_clear_flag(hdiv, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* Message history — wrapping label, clipped by screen boundary */
+    s_td_content = lv_label_create(s_scr_thread_detail);
+    lv_obj_set_style_text_font(s_td_content, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_td_content, C_GRAY, 0);
+    lv_obj_set_style_bg_opa(s_td_content, LV_OPA_TRANSP, 0);
+    lv_obj_set_pos(s_td_content, H_PAD, TD_CONTENT_Y + 4);
+    lv_obj_set_size(s_td_content, LCD_W - H_PAD * 2, TD_CONTENT_H - 4);
+    lv_label_set_long_mode(s_td_content, LV_LABEL_LONG_WRAP);
+    lv_label_set_text(s_td_content, "");
+}
+
 static void build_bricked_screen(void)
 {
     s_scr_bricked = lv_obj_create(NULL);
@@ -543,59 +608,115 @@ static void build_call_screen(void)
    Navigation helpers
    ════════════════════════════════════════════════════════════════════════════ */
 
-/* Fill one half-card with notification data and set its highlight state.
+/* Fill one half-card with the latest message from a thread.
  * Call inside lvgl_port_lock. */
-static void populate_card(int ci, const notif_item_t *n, bool highlighted)
+static void populate_card(int ci, const ns_thread_t *t, bool highlighted)
 {
     lv_color_t border_col = highlighted ? C_ACCENT : C_DIM;
     lv_color_t icon_col   = highlighted ? C_ACCENT : C_DIM;
     lv_obj_set_style_border_color(s_card[ci], border_col, 0);
     lv_obj_set_style_text_color(s_card_icon[ci], icon_col, 0);
-    lv_label_set_text(s_card_icon[ci],  category_icon(n->cat));
-    lv_label_set_text(s_card_title[ci], n->title[0] ? n->title : n->cat);
-    lv_label_set_text(s_card_ts[ci],    n->timestamp);
-    lv_label_set_text(s_card_body[ci],  n->message[0] ? n->message : " ");
+    lv_label_set_text(s_card_icon[ci],  category_icon(t->cat));
+    lv_label_set_text(s_card_title[ci], t->sender[0] ? t->sender : t->cat);
+    lv_label_set_text(s_card_ts[ci],    t->count > 0 ? t->msgs[0].ts : "");
+    lv_label_set_text(s_card_body[ci],
+                      (t->count > 0 && t->msgs[0].text[0])
+                      ? t->msgs[0].text : " ");
     lv_obj_remove_flag(s_card[ci], LV_OBJ_FLAG_HIDDEN);
 }
 
-/* Load the detail screen for the given 1-based page.
+/* Load the thread-list detail screen for the given 1-based page.
  *
- * Newest messages anchor at the bottom, like a chat view.
- * Scrolling up goes to older messages:
+ * Newest thread anchors at the bottom, like a chat view.
+ * Scrolling up goes to older threads:
  *
- *   page == 1  →  top = notif[1] (dimmed),     bottom = notif[0] (highlighted)
- *   page >= 2  →  top = notif[page-1] (highlighted), bottom = notif[page-2] (dimmed)
+ *   page == 1  →  top = thread[1] (dimmed),         bottom = thread[0] (highlighted)
+ *   page >= 2  →  top = thread[page-1] (highlighted), bottom = thread[page-2] (dimmed)
  *
  * card[0] = top half, card[1] = bottom half.
  * Call inside lvgl_port_lock. */
 static void load_notif_detail_locked(int page)
 {
+    int total = notif_store_count();
     update_status_label(s_detail_status);
 
     char pager_buf[16];
-    snprintf(pager_buf, sizeof(pager_buf), "%d/%d", page, s_notif_count);
+    snprintf(pager_buf, sizeof(pager_buf), "%d/%d", page, total);
     lv_label_set_text(s_detail_pager, pager_buf);
 
     if (page == 1) {
-        /* Newest at bottom, highlighted */
-        populate_card(1, &s_notif_hist[0], true);
-        if (s_notif_count >= 2) {
-            populate_card(0, &s_notif_hist[1], false);
+        /* Newest thread at bottom, highlighted */
+        const ns_thread_t *t0 = notif_store_get(0);
+        if (t0) populate_card(1, t0, true);
+        const ns_thread_t *t1 = notif_store_get(1);
+        if (t1) {
+            populate_card(0, t1, false);
         } else {
             lv_obj_add_flag(s_card[0], LV_OBJ_FLAG_HIDDEN);
         }
     } else {
-        /* Older message at top (highlighted), newer below (dimmed) */
-        populate_card(0, &s_notif_hist[page - 1], true);
-        populate_card(1, &s_notif_hist[page - 2], false);
+        /* Older thread at top (highlighted), newer below (dimmed) */
+        const ns_thread_t *th = notif_store_get(page - 1);
+        const ns_thread_t *tl = notif_store_get(page - 2);
+        if (th) populate_card(0, th, true);
+        if (tl) populate_card(1, tl, false);
     }
 
     lv_screen_load(s_scr_notif_detail);
 }
 
+/* Load thread detail screen for thread at idx.
+ * Shows full message history (newest first).
+ * Call inside lvgl_port_lock. */
+static void load_thread_detail_locked(int idx)
+{
+    const ns_thread_t *t = notif_store_get(idx);
+    if (!t) return;
+
+    update_status_label(s_td_status);
+    lv_label_set_text(s_td_icon,   category_icon(t->cat));
+    lv_label_set_text(s_td_sender, t->sender[0] ? t->sender : t->cat);
+
+    /* Build formatted history — newest at top (index 0) */
+    static char buf[TD_BUF_SIZE];
+    buf[0] = '\0';
+    size_t pos = 0;
+    for (int i = 0; i < t->count && pos < sizeof(buf) - 1; i++) {
+        int n = snprintf(buf + pos, sizeof(buf) - pos,
+                         "%s\n%s\n\n",
+                         t->msgs[i].ts[0]   ? t->msgs[i].ts   : "--:--",
+                         t->msgs[i].text[0] ? t->msgs[i].text : " ");
+        if (n > 0 && (size_t)n < sizeof(buf) - pos)
+            pos += (size_t)n;
+        else
+            break;
+    }
+    lv_label_set_text(s_td_content, buf);
+
+    lv_screen_load(s_scr_thread_detail);
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    Timers
    ════════════════════════════════════════════════════════════════════════════ */
+
+/* 500ms pulse: show/hide the scroll hint when on idle with notifications */
+static void hint_tick_cb(void *arg)
+{
+    if (!s_lbl_hint) return;
+    if (!lvgl_port_lock(0)) return;
+    if (s_screen == SCREEN_IDLE && notif_store_count() > 0) {
+        s_hint_on = !s_hint_on;
+        if (s_hint_on)
+            lv_obj_remove_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+        else
+            lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+    } else if (s_lbl_hint) {
+        s_hint_on = false;
+        lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+    }
+    lvgl_port_unlock();
+}
 
 static void clock_tick_cb(void *arg)
 {
@@ -713,6 +834,7 @@ void ui_init(void)
         build_notif_detail_screen();
         build_bricked_screen();
         build_call_screen();
+        build_thread_detail_screen();
         lv_screen_load(s_scr_idle);
         ESP_LOGI(TAG, "Screens built, free heap: %lu", esp_get_free_heap_size());
         lvgl_port_unlock();
@@ -727,6 +849,15 @@ void ui_init(void)
     };
     ESP_ERROR_CHECK(esp_timer_create(&clock_args, &clock_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(clock_timer, 1000000));
+
+    /* ── Scroll hint pulse timer (500ms) ── */
+    esp_timer_handle_t hint_timer;
+    esp_timer_create_args_t hint_args = {
+        .callback = hint_tick_cb,
+        .name     = "ui_hint",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&hint_args, &hint_timer));
+    ESP_ERROR_CHECK(esp_timer_start_periodic(hint_timer, 500000));
 
     ESP_LOGI(TAG, "LVGL UI initialised (%dx%d)", LCD_W, LCD_H);
 }
@@ -772,18 +903,18 @@ void ui_show_bricked(void)
 
 void ui_show_notification(const char *category, const char *title, const char *message)
 {
-    /* Prepend to history */
-    if (s_notif_count < MAX_NOTIFS) s_notif_count++;
-    memmove(&s_notif_hist[1], &s_notif_hist[0],
-            (size_t)(s_notif_count - 1) * sizeof(notif_item_t));
-    notif_item_t *n = &s_notif_hist[0];
-    memset(n, 0, sizeof(*n));
-    strncpy(n->cat, category ? category : "", NOTIF_CAT_LEN - 1);
-    sanitize_utf8(n->title,   NOTIF_TTL_LEN, title   ? title   : "");
-    sanitize_utf8(n->message, NOTIF_MSG_LEN, message ? message : "");
-    capture_timestamp(n->timestamp, sizeof(n->timestamp));
+    /* Sanitize and store — title becomes sender key for thread grouping */
+    char san_sender[NS_SENDER_LEN];
+    char san_msg[NS_MSG_LEN];
+    sanitize_utf8(san_sender, sizeof(san_sender), title   ? title   : "");
+    sanitize_utf8(san_msg,    sizeof(san_msg),    message ? message : "");
 
-    /* Return to home — new notification badge will be reachable via scroll */
+    char ts[NS_TS_LEN];
+    capture_timestamp(ts, sizeof(ts));
+
+    notif_store_add(category ? category : "", san_sender, san_msg, ts);
+
+    /* Return to home — notification is reachable via scroll */
     if (!lvgl_port_lock(0)) return;
     s_screen       = SCREEN_IDLE;
     s_current_page = 0;
@@ -878,13 +1009,14 @@ void ui_clear_message(void)             {}
 
 void ui_navigate(int delta)
 {
-    /* Only navigate when on the home or detail screens */
+    /* Only navigate when on the home or thread-list screens */
     if (s_screen != SCREEN_IDLE && s_screen != SCREEN_NOTIF_DETAIL) return;
-    if (s_notif_count == 0 && delta > 0) return;
+    int total = notif_store_count();
+    if (total == 0 && delta > 0) return;
 
     int new_page = s_current_page + delta;
-    if (new_page < 0)               new_page = 0;
-    if (new_page > s_notif_count)   new_page = s_notif_count;
+    if (new_page < 0)      new_page = 0;
+    if (new_page > total)  new_page = total;
     if (new_page == s_current_page) return;
 
     s_current_page = new_page;
@@ -900,5 +1032,31 @@ void ui_navigate(int delta)
         s_screen = SCREEN_NOTIF_DETAIL;
         load_notif_detail_locked(new_page);
         lvgl_port_unlock();
+    }
+}
+
+bool ui_has_unread(void)
+{
+    return notif_store_count() > 0;
+}
+
+void ui_encoder_click(void)
+{
+    if (s_screen == SCREEN_NOTIF_DETAIL) {
+        /* Drill into thread detail for the highlighted card */
+        int thread_idx = (s_current_page == 1) ? 0 : (s_current_page - 1);
+        if (!lvgl_port_lock(0)) return;
+        s_screen = SCREEN_THREAD_DETAIL;
+        load_thread_detail_locked(thread_idx);
+        lvgl_port_unlock();
+    } else if (s_screen == SCREEN_THREAD_DETAIL) {
+        /* Back to thread list */
+        if (!lvgl_port_lock(0)) return;
+        s_screen = SCREEN_NOTIF_DETAIL;
+        load_notif_detail_locked(s_current_page);
+        lvgl_port_unlock();
+    } else {
+        /* Default: return home */
+        ui_navigate(-10);
     }
 }

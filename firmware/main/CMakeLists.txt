@@ -5,6 +5,7 @@ idf_component_register(
         "brick_service.c"
         "encoder.c"
         "hfp_client.c"
+        "notif_store.c"
         "pager_state.c"
         "ui.c"
     INCLUDE_DIRS
