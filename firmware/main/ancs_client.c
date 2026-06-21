@@ -107,6 +107,10 @@ static uint16_t s_notif_src_handle  = ESP_GATT_ILLEGAL_HANDLE;
 static uint16_t s_ctrl_pt_handle    = ESP_GATT_ILLEGAL_HANDLE;
 static uint16_t s_data_src_handle   = ESP_GATT_ILLEGAL_HANDLE;
 
+static uint16_t s_cts_start_handle = ESP_GATT_ILLEGAL_HANDLE;
+static uint16_t s_cts_end_handle   = ESP_GATT_ILLEGAL_HANDLE;
+static uint16_t s_cts_char_handle  = ESP_GATT_ILLEGAL_HANDLE;
+
 /* Which step of discovery we're on */
 typedef enum {
     DISC_IDLE,
@@ -359,6 +363,15 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             ESP_LOGI(TAG, "  NotifSrc=0x%04x CtrlPt=0x%04x DataSrc=0x%04x",
                      s_notif_src_handle, s_ctrl_pt_handle, s_data_src_handle);
         }
+        /* Check if this is the Current Time Service (CTS) */
+        if (srvc->uuid.len == ESP_UUID_LEN_16 &&
+            srvc->uuid.uuid.uuid16 == 0x1805)
+        {
+            s_cts_start_handle = param->search_res.start_handle;
+            s_cts_end_handle   = param->search_res.end_handle;
+            ESP_LOGI(TAG, "CTS service found: start=0x%04x end=0x%04x",
+                     s_cts_start_handle, s_cts_end_handle);
+        }
         break;
     }
 
@@ -433,6 +446,20 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
             ESP_LOGI(TAG, "ANCS fully subscribed");
             ui_set_status_ble("BLE");
             ui_show_idle();
+            /* Read current time from CTS if available */
+            if (s_cts_start_handle != ESP_GATT_ILLEGAL_HANDLE) {
+                esp_bt_uuid_t cts_char_uuid = { .len = ESP_UUID_LEN_16, .uuid.uuid16 = 0x2A2B };
+                esp_gattc_char_elem_t result[2];
+                uint16_t count = 2;
+                if (esp_ble_gattc_get_char_by_uuid(gattc_if, s_conn_id,
+                        s_cts_start_handle, s_cts_end_handle,
+                        cts_char_uuid, result, &count) == ESP_OK && count > 0) {
+                    s_cts_char_handle = result[0].char_handle;
+                    esp_ble_gattc_read_char(gattc_if, s_conn_id,
+                                            s_cts_char_handle, ESP_GATT_AUTH_REQ_NONE);
+                    ESP_LOGI(TAG, "Reading CTS char h=0x%04x", s_cts_char_handle);
+                }
+            }
         }
         break;
     }
@@ -502,6 +529,22 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         }
         break;
 
+    case ESP_GATTC_READ_CHAR_EVT:
+        if (param->read.status == ESP_GATT_OK &&
+            param->read.handle == s_cts_char_handle &&
+            param->read.value_len >= 7) {
+            const uint8_t *v = param->read.value;
+            uint16_t year = (uint16_t)v[0] | ((uint16_t)v[1] << 8);
+            uint8_t month = v[2], day = v[3];
+            uint8_t hours = v[4], minutes = v[5], seconds = v[6];
+            uint8_t cts_dow = (param->read.value_len >= 8) ? v[7] : 0;
+            uint8_t our_dow = (cts_dow == 7) ? 0 : cts_dow;
+            ESP_LOGI(TAG, "CTS time: %04d-%02d-%02d %02d:%02d:%02d dow=%d",
+                     year, month, day, hours, minutes, seconds, our_dow);
+            ui_set_time(hours, minutes, seconds, our_dow, year, month, day);
+        }
+        break;
+
     case ESP_GATTC_DISCONNECT_EVT:
         ESP_LOGW(TAG, "Disconnected (reason=%d) — restarting advertising",
                  param->disconnect.reason);
@@ -510,6 +553,9 @@ static void gattc_event_handler(esp_gattc_cb_event_t event,
         s_notif_src_handle= ESP_GATT_ILLEGAL_HANDLE;
         s_ctrl_pt_handle  = ESP_GATT_ILLEGAL_HANDLE;
         s_data_src_handle = ESP_GATT_ILLEGAL_HANDLE;
+        s_cts_start_handle= ESP_GATT_ILLEGAL_HANDLE;
+        s_cts_end_handle  = ESP_GATT_ILLEGAL_HANDLE;
+        s_cts_char_handle = ESP_GATT_ILLEGAL_HANDLE;
         s_disc_state      = DISC_IDLE;
         s_fetch_pending   = false;
         ancs_client_start_advertising();

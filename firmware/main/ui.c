@@ -61,7 +61,6 @@
 typedef enum {
     SCREEN_IDLE,
     SCREEN_BRICKED,
-    SCREEN_NOTIFICATION,
     SCREEN_INCOMING_CALL,
     SCREEN_CALL_ACTIVE,
 } screen_state_t;
@@ -79,44 +78,21 @@ typedef struct {
 
 static pager_time_t s_time = {0};
 
-/* ── Content state ───────────────────────────────────────────────────────── */
-#define MAX_TODOS      4
-#define TODO_TEXT_LEN  32
-#define MSG_TEXT_LEN   64
-
-typedef struct {
-    bool active;
-    bool checked;
-    char text[TODO_TEXT_LEN + 1];
-} todo_item_t;
-
-static todo_item_t s_todos[MAX_TODOS] = {0};
-static char        s_message[MSG_TEXT_LEN + 1] = "";
-
 /* ── Status state ────────────────────────────────────────────────────────── */
 static char s_ble_status[16] = "";
-static char s_hfp_status[16] = "";
-static bool s_is_bricked = false;
 
 /* ── LVGL display handle ─────────────────────────────────────────────────── */
 static lv_display_t *s_disp = NULL;
 
 /* ── LVGL screen objects ─────────────────────────────────────────────────── */
 
-/* Shared across all screens */
-static lv_obj_t *s_scr_idle   = NULL;
+/* Screens */
+static lv_obj_t *s_scr_idle    = NULL;   /* main / notification list screen */
 static lv_obj_t *s_scr_bricked = NULL;
-static lv_obj_t *s_scr_notif  = NULL;
-static lv_obj_t *s_scr_call   = NULL;   /* shared for incoming + active */
+static lv_obj_t *s_scr_call    = NULL;   /* shared for incoming + active */
 
-/* Idle screen labels */
-static lv_obj_t *s_lbl_status   = NULL;  /* top-left: time + conn state */
-static lv_obj_t *s_lbl_lock     = NULL;  /* top-right: LOCKED */
-static lv_obj_t *s_lbl_clock    = NULL;
-static lv_obj_t *s_lbl_ampm     = NULL;
-static lv_obj_t *s_lbl_date     = NULL;
-static lv_obj_t *s_lbl_todos[MAX_TODOS] = {NULL};
-static lv_obj_t *s_lbl_message  = NULL;
+/* Main screen labels */
+static lv_obj_t *s_lbl_status = NULL;   /* status bar: time + BT state */
 
 /* Notification history — newest at index 0 */
 #define MAX_NOTIFS    5
@@ -141,8 +117,7 @@ static int          s_notif_count = 0;
 #define CARD_PX   10   /* horizontal padding inside a card    */
 #define CARD_PY    6   /* vertical padding inside a card      */
 
-static lv_obj_t *s_notif_status = NULL;   /* fixed label, updated externally */
-static lv_obj_t *s_notif_list   = NULL;   /* scrollable container, rebuilt on each notification */
+static lv_obj_t *s_notif_list = NULL;   /* scrollable container inside s_scr_idle */
 
 /* Call screen labels */
 static lv_obj_t *s_call_icon   = NULL;  /* LV_SYMBOL_CALL, colored */
@@ -155,10 +130,7 @@ static lv_obj_t *s_call_status = NULL;
 static lv_obj_t *s_lbl_bricked      = NULL;
 static lv_obj_t *s_lbl_bricked_hint = NULL;
 
-/* ── Notification dismiss timer ──────────────────────────────────────────── */
-static esp_timer_handle_t s_notif_timer = NULL;
-
-/* ── Day / month name tables ─────────────────────────────────────────────── */
+/* ── Day / month name tables (used for logging only) ────────────────────── */
 static const char *dow_names[]   = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
 static const char *month_names[] = {
     "","Jan","Feb","Mar","Apr","May","Jun",
@@ -293,7 +265,17 @@ static void add_notif_card(lv_obj_t *parent, const notif_item_t *n, int y)
 /* Wipe all cards and rebuild from s_notif_hist — call inside lvgl_port_lock */
 static void rebuild_notif_list(void)
 {
+    if (!s_notif_list) return;
     lv_obj_clean(s_notif_list);
+    if (s_notif_count == 0) {
+        lv_obj_t *empty = lv_label_create(s_notif_list);
+        lv_obj_set_style_text_font(empty, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(empty, C_DIM, 0);
+        lv_obj_set_style_bg_opa(empty, LV_OPA_TRANSP, 0);
+        lv_obj_align(empty, LV_ALIGN_CENTER, 0, 0);
+        lv_label_set_text(empty, "No messages");
+        return;
+    }
     for (int i = 0; i < s_notif_count; i++) {
         add_notif_card(s_notif_list, &s_notif_hist[i], i * CARD_H);
     }
@@ -341,34 +323,6 @@ static void format_phone_number(char *out, size_t outsz, const char *raw)
     }
 }
 
-/* Rebuild the content area (todos + message) on the idle screen */
-static void redraw_content(void)
-{
-    for (int i = 0; i < MAX_TODOS; i++) {
-        if (!s_lbl_todos[i]) continue;
-        if (s_todos[i].active) {
-            char line[48];
-            snprintf(line, sizeof(line), "%s  %s",
-                     s_todos[i].checked ? LV_SYMBOL_OK : "-",
-                     s_todos[i].text);
-            lv_label_set_text(s_lbl_todos[i], line);
-            lv_obj_set_style_text_color(s_lbl_todos[i],
-                s_todos[i].checked ? C_DIM : C_GRAY, 0);
-            lv_obj_remove_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-    if (s_lbl_message) {
-        if (s_message[0]) {
-            lv_label_set_text(s_lbl_message, s_message);
-            lv_obj_remove_flag(s_lbl_message, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_lbl_message, LV_OBJ_FLAG_HIDDEN);
-        }
-    }
-}
-
 /* ════════════════════════════════════════════════════════════════════════════
    Screen builders — called once during ui_init
    ════════════════════════════════════════════════════════════════════════════ */
@@ -378,47 +332,22 @@ static void build_idle_screen(void)
     s_scr_idle = lv_obj_create(NULL);
     style_screen(s_scr_idle);
 
-    /* Status bar — top left: time/conn, top right: LOCKED */
+    /* Status bar — top: time + BT state */
     s_lbl_status = make_label(s_scr_idle,
         &lv_font_montserrat_12, C_GRAY,
-        LV_ALIGN_TOP_LEFT, 10, 8, "");
+        LV_ALIGN_TOP_LEFT, 10, 5, "");
 
-    s_lbl_lock = make_label(s_scr_idle,
-        &lv_font_montserrat_12, C_DIMRED,
-        LV_ALIGN_TOP_RIGHT, -10, 8, "");
+    /* Scrollable notification list — fills area below status bar */
+    s_notif_list = lv_obj_create(s_scr_idle);
+    lv_obj_set_pos(s_notif_list, 0, STATUS_H);
+    lv_obj_set_size(s_notif_list, LCD_W, LCD_H - STATUS_H);
+    lv_obj_set_style_bg_opa(s_notif_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_notif_list, 0, 0);
+    lv_obj_set_style_pad_all(s_notif_list, 0, 0);
+    lv_obj_set_style_radius(s_notif_list, 0, 0);
+    lv_obj_set_scrollbar_mode(s_notif_list, LV_SCROLLBAR_MODE_OFF);
 
-    /* Clock — large, left-aligned */
-    s_lbl_clock = make_label(s_scr_idle,
-        &lv_font_montserrat_48, C_WHITE,
-        LV_ALIGN_TOP_LEFT, 10, 28, "--:--");
-
-    /* AM/PM — small, right of clock, vertically centred */
-    s_lbl_ampm = make_label(s_scr_idle,
-        &lv_font_montserrat_16, C_GRAY,
-        LV_ALIGN_TOP_LEFT, 10 + 48 * 3 + 8, 44, "");
-
-    /* Date — below clock */
-    s_lbl_date = make_label(s_scr_idle,
-        &lv_font_montserrat_14, C_GRAY,
-        LV_ALIGN_TOP_LEFT, 10, 94, "");
-
-    /* Content area — todos + message */
-    int content_y = 118;
-    for (int i = 0; i < MAX_TODOS; i++) {
-        s_lbl_todos[i] = make_label(s_scr_idle,
-            &lv_font_montserrat_14, C_GRAY,
-            LV_ALIGN_TOP_LEFT, 10, content_y + i * 22, "");
-        lv_label_set_long_mode(s_lbl_todos[i], LV_LABEL_LONG_CLIP);
-        lv_obj_set_width(s_lbl_todos[i], LCD_W - 20);
-        lv_obj_add_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
-    }
-
-    s_lbl_message = make_label(s_scr_idle,
-        &lv_font_montserrat_14, C_GRAY,
-        LV_ALIGN_TOP_LEFT, 10, content_y + MAX_TODOS * 22, "");
-    lv_label_set_long_mode(s_lbl_message, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(s_lbl_message, LCD_W - 20);
-    lv_obj_add_flag(s_lbl_message, LV_OBJ_FLAG_HIDDEN);
+    rebuild_notif_list();
 }
 
 static void build_bricked_screen(void)
@@ -433,27 +362,6 @@ static void build_bricked_screen(void)
     s_lbl_bricked_hint = make_label(s_scr_bricked,
         &lv_font_montserrat_12, C_DIM,
         LV_ALIGN_CENTER, 0, 24, "hold to unbrick");
-}
-
-static void build_notification_screen(void)
-{
-    s_scr_notif = lv_obj_create(NULL);
-    style_screen(s_scr_notif);
-
-    /* Fixed status bar strip at the very top */
-    s_notif_status = make_label(s_scr_notif,
-        &lv_font_montserrat_12, C_GRAY,
-        LV_ALIGN_TOP_LEFT, 10, 5, "");
-
-    /* Scrollable card list — fills the area below the status bar */
-    s_notif_list = lv_obj_create(s_scr_notif);
-    lv_obj_set_pos(s_notif_list, 0, STATUS_H);
-    lv_obj_set_size(s_notif_list, LCD_W, LCD_H - STATUS_H);
-    lv_obj_set_style_bg_opa(s_notif_list, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(s_notif_list, 0, 0);
-    lv_obj_set_style_pad_all(s_notif_list, 0, 0);
-    lv_obj_set_style_radius(s_notif_list, 0, 0);
-    lv_obj_set_scrollbar_mode(s_notif_list, LV_SCROLLBAR_MODE_OFF);
 }
 
 static void build_call_screen(void)
@@ -497,17 +405,6 @@ static void build_call_screen(void)
    Timers
    ════════════════════════════════════════════════════════════════════════════ */
 
-static void notif_timeout_cb(void *arg)
-{
-    if (lvgl_port_lock(0)) {
-        if (s_screen == SCREEN_NOTIFICATION) {
-            s_screen = SCREEN_IDLE;
-            lv_screen_load(s_scr_idle);
-        }
-        lvgl_port_unlock();
-    }
-}
-
 static void clock_tick_cb(void *arg)
 {
     if (!s_time.valid) return;
@@ -528,33 +425,10 @@ static void clock_tick_cb(void *arg)
         }
     }
 
-    /* Only redraw on idle screen */
-    if (s_screen != SCREEN_IDLE) return;
+    /* Update status bar once per minute */
+    if (s_time.sec != 0) return;
     if (!lvgl_port_lock(0)) return;
-
-    /* Update clock label */
-    int h = s_time.hour % 12;
-    if (h == 0) h = 12;
-    char clk[8];
-    snprintf(clk, sizeof(clk), "%d:%02d", h, s_time.min);
-    lv_label_set_text(s_lbl_clock, clk);
-    lv_label_set_text(s_lbl_ampm, s_time.hour < 12 ? "AM" : "PM");
-
-    /* Update status bar time every minute */
-    if (s_time.sec == 0) {
-        update_status_label(s_lbl_status);
-
-        /* Update date at midnight */
-        if (s_time.hour == 0 && s_time.min == 0) {
-            char date[24];
-            const char *dow = (s_time.dow < 7) ? dow_names[s_time.dow] : "???";
-            const char *mon = (s_time.month >= 1 && s_time.month <= 12)
-                              ? month_names[s_time.month] : "???";
-            snprintf(date, sizeof(date), "%s, %s %d", dow, mon, s_time.day);
-            lv_label_set_text(s_lbl_date, date);
-        }
-    }
-
+    update_status_label(s_lbl_status);
     lvgl_port_unlock();
 }
 
@@ -656,7 +530,6 @@ void ui_init(void)
     if (lvgl_port_lock(0)) {
         build_idle_screen();
         build_bricked_screen();
-        build_notification_screen();
         build_call_screen();
         lv_screen_load(s_scr_idle);
         ESP_LOGI(TAG, "Screens built, free heap: %lu", esp_get_free_heap_size());
@@ -667,14 +540,7 @@ void ui_init(void)
     /* Trigger initial render outside the lock — the LVGL port task handles flush */
     lv_refr_now(s_disp);
 
-    /* ── Notification dismiss timer (one-shot) ── */
-    esp_timer_create_args_t notif_args = {
-        .callback = notif_timeout_cb,
-        .name     = "ui_notif",
-    };
-    ESP_ERROR_CHECK(esp_timer_create(&notif_args, &s_notif_timer));
-
-    /* ── Clock tick timer (1s periodic) ── */
+    /* ── Clock tick timer (1s periodic) — advances s_time and refreshes status bar ── */
     esp_timer_handle_t clock_timer;
     esp_timer_create_args_t clock_args = {
         .callback = clock_tick_cb,
@@ -701,18 +567,12 @@ void ui_set_status_ble(const char *text)
     s_ble_status[sizeof(s_ble_status) - 1] = '\0';
     if (lvgl_port_lock(0)) {
         update_status_label(s_lbl_status);
-        update_status_label(s_notif_status);
         update_status_label(s_call_status);
         lvgl_port_unlock();
     }
 }
 
-void ui_set_status_hfp(const char *text)
-{
-    strncpy(s_hfp_status, text, sizeof(s_hfp_status) - 1);
-    s_hfp_status[sizeof(s_hfp_status) - 1] = '\0';
-    /* HFP status reflected on call screen label elsewhere */
-}
+void ui_set_status_hfp(const char *text) { (void)text; }
 
 /* ── Screen transitions ──────────────────────────────────────────────────── */
 
@@ -720,10 +580,7 @@ void ui_show_idle(void)
 {
     if (!lvgl_port_lock(0)) return;
     s_screen = SCREEN_IDLE;
-    s_is_bricked = false;
-    lv_label_set_text(s_lbl_lock, "");
     update_status_label(s_lbl_status);
-    redraw_content();
     lv_screen_load(s_scr_idle);
     lvgl_port_unlock();
 }
@@ -732,7 +589,6 @@ void ui_show_bricked(void)
 {
     if (!lvgl_port_lock(0)) return;
     s_screen = SCREEN_BRICKED;
-    s_is_bricked = true;
     lv_screen_load(s_scr_bricked);
     lvgl_port_unlock();
 }
@@ -751,20 +607,15 @@ void ui_show_notification(const char *category, const char *title, const char *m
     capture_timestamp(n->timestamp, sizeof(n->timestamp));
 
     if (!lvgl_port_lock(0)) return;
-    s_screen = SCREEN_NOTIFICATION;
-
-    update_status_label(s_notif_status);
+    s_screen = SCREEN_IDLE;
+    update_status_label(s_lbl_status);
     rebuild_notif_list();
-    lv_screen_load(s_scr_notif);
+    lv_screen_load(s_scr_idle);
     lvgl_port_unlock();
-
-    esp_timer_stop(s_notif_timer);
-    esp_timer_start_once(s_notif_timer, 8000000);
 }
 
 void ui_show_incoming_call(const char *caller)
 {
-    esp_timer_stop(s_notif_timer);
     if (!lvgl_port_lock(0)) return;
     s_screen = SCREEN_INCOMING_CALL;
 
@@ -790,7 +641,6 @@ void ui_show_incoming_call(const char *caller)
 
 void ui_show_call_active(void)
 {
-    esp_timer_stop(s_notif_timer);
     if (!lvgl_port_lock(0)) return;
     s_screen = SCREEN_CALL_ACTIVE;
 
@@ -825,66 +675,17 @@ void ui_set_time(uint8_t hour, uint8_t min, uint8_t sec,
              day, year);
 
     if (!lvgl_port_lock(0)) return;
-
-    /* Clock */
-    int h = hour % 12;
-    if (h == 0) h = 12;
-    char clk[8];
-    snprintf(clk, sizeof(clk), "%d:%02d", h, min);
-    lv_label_set_text(s_lbl_clock, clk);
-    lv_label_set_text(s_lbl_ampm, hour < 12 ? "AM" : "PM");
-
-    /* Date */
-    char date[24];
-    const char *dow_str = (dow < 7) ? dow_names[dow] : "???";
-    const char *mon_str = (month >= 1 && month <= 12) ? month_names[month] : "???";
-    snprintf(date, sizeof(date), "%s, %s %d", dow_str, mon_str, day);
-    lv_label_set_text(s_lbl_date, date);
-
-    /* Status bar */
     update_status_label(s_lbl_status);
-
     lvgl_port_unlock();
 }
 
 void ui_set_todo(uint8_t index, bool checked, const char *text)
 {
-    if (index >= MAX_TODOS) return;
-    s_todos[index].active  = true;
-    s_todos[index].checked = checked;
-    strncpy(s_todos[index].text, text, TODO_TEXT_LEN);
-    s_todos[index].text[TODO_TEXT_LEN] = '\0';
-
-    if (s_screen == SCREEN_IDLE && lvgl_port_lock(0)) {
-        redraw_content();
-        lvgl_port_unlock();
-    }
+    (void)index; (void)checked; (void)text;
 }
 
-void ui_clear_todos(void)
-{
-    memset(s_todos, 0, sizeof(s_todos));
-    if (s_screen == SCREEN_IDLE && lvgl_port_lock(0)) {
-        redraw_content();
-        lvgl_port_unlock();
-    }
-}
+void ui_clear_todos(void) {}
 
-void ui_set_message(const char *text)
-{
-    strncpy(s_message, text, MSG_TEXT_LEN);
-    s_message[MSG_TEXT_LEN] = '\0';
-    if (s_screen == SCREEN_IDLE && lvgl_port_lock(0)) {
-        redraw_content();
-        lvgl_port_unlock();
-    }
-}
+void ui_set_message(const char *text) { (void)text; }
 
-void ui_clear_message(void)
-{
-    s_message[0] = '\0';
-    if (s_screen == SCREEN_IDLE && lvgl_port_lock(0)) {
-        redraw_content();
-        lvgl_port_unlock();
-    }
-}
+void ui_clear_message(void) {}
