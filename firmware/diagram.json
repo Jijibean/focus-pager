@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "author": "Focus Pager",
+  "editor": "wokwi",
+  "parts": [
+    {
+      "type": "board-esp32-devkit-v1",
+      "id": "esp",
+      "top": 80,
+      "left": 0,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-ili9341",
+      "id": "lcd",
+      "top": 0,
+      "left": 350,
+      "attrs": { "controller": "st7789v" }
+    },
+    {
+      "type": "wokwi-rotary-encoder-20det",
+      "id": "enc",
+      "top": 400,
+      "left": 350,
+      "attrs": {}
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_sw",
+      "top": 390,
+      "left": 240,
+      "rotate": 90,
+      "attrs": { "value": "10000" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led",
+      "top": 320,
+      "left": 180,
+      "attrs": { "color": "red" }
+    },
+    {
+      "type": "wokwi-resistor",
+      "id": "r_led",
+      "top": 320,
+      "left": 130,
+      "rotate": 90,
+      "attrs": { "value": "220" }
+    }
+  ],
+  "connections": [
+    ["esp:TX", "$serialMonitor:RX", "", []],
+    ["esp:RX", "$serialMonitor:TX", "", []],
+
+    ["esp:3V3",   "lcd:VCC",  "red",    []],
+    ["esp:GND.1", "lcd:GND",  "black",  []],
+    ["esp:IO23",  "lcd:MOSI", "blue",   []],
+    ["esp:IO18",  "lcd:SCK",  "green",  []],
+    ["esp:IO5",   "lcd:CS",   "purple", []],
+    ["esp:IO4",   "lcd:DC",   "orange", []],
+    ["esp:IO2",   "lcd:RST",  "yellow", []],
+    ["esp:IO21",  "lcd:LED",  "white",  []],
+
+    ["esp:IO32",  "enc:CLK",  "green",  []],
+    ["esp:IO33",  "enc:DT",   "blue",   []],
+    ["esp:IO34",  "r_sw:1",   "purple", []],
+    ["r_sw:2",    "enc:SW",   "purple", []],
+    ["esp:3V3",   "enc:VCC",  "red",    []],
+    ["esp:GND.2", "enc:GND",  "black",  []],
+
+    ["esp:IO13",  "r_led:1",  "red",    []],
+    ["r_led:2",   "led:A",    "red",    []],
+    ["esp:GND.3", "led:C",    "black",  []]
+  ]
+}

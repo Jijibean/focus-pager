@@ -1,0 +1,12 @@
+menu "Focus Pager"
+
+config PAGER_SIMULATOR
+    bool "Simulator build (disables Bluetooth for Wokwi)"
+    default n
+    help
+        When enabled, all Bluetooth initialisation (BT controller,
+        Bluedroid, ANCS, HFP, brick service) is skipped so the
+        firmware can run in the Wokwi simulator without panicking.
+        Only the display, encoder, and NVS store are active.
+
+endmenu

@@ -1,0 +1,8 @@
+# Simulator overlay — apply on top of the base sdkconfig for Wokwi builds.
+# Usage:  idf.py -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.simulator" build
+
+# Enable simulator guard in application code
+CONFIG_PAGER_SIMULATOR=y
+
+# Disable Bluetooth entirely so BT libs are not linked
+CONFIG_BT_ENABLED=n

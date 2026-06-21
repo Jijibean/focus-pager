@@ -1,0 +1,4 @@
+[wokwi]
+version = 1
+firmware = "build_sim/focus_pager_phase1.bin"
+elf     = "build_sim/focus_pager_phase1.elf"

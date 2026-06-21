@@ -111,6 +111,7 @@ void app_main(void)
     ui_set_status_ble("Boot");
     xTaskCreate(led_task, "led", 1024, NULL, 1, NULL);
 
+#ifndef CONFIG_PAGER_SIMULATOR
     /* BT controller — BTDM mode: BLE (ANCS + Brick) + Classic BT (HFP) */
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
@@ -130,14 +131,19 @@ void app_main(void)
     /* HFP Hands-Free + I2S audio */
     hfp_client_init();
 
+    /* Button + brick state machine (GPIO27 long-press = unbrick) */
+    pager_state_init(on_unbrick_event);
+#endif /* CONFIG_PAGER_SIMULATOR */
+
     /* Rotary encoder (CLK=GPIO32, DT=GPIO33, SW=GPIO34) */
     encoder_init(on_encoder_rotate, on_encoder_click);
 
-    /* Button + brick state machine (GPIO27 long-press = unbrick) */
-    pager_state_init(on_unbrick_event);
-
     ESP_LOGI(TAG, "Focus Pager Phase 4 running");
+#ifndef CONFIG_PAGER_SIMULATOR
     ui_set_status_ble("Adv");
+#else
+    ui_set_status_ble("Sim");
+#endif
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
