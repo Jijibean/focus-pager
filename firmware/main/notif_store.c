@@ -59,6 +59,9 @@ static void save_all(void)
         key_thread(key, i, "n");
         nvs_set_i32(h, key, (int32_t)s_threads[i].count);
 
+        key_thread(key, i, "u");
+        nvs_set_i32(h, key, (int32_t)s_threads[i].unread);
+
         for (int j = 0; j < s_threads[i].count; j++) {
             key_msg(key, i, j, "t");
             nvs_set_str(h, key, s_threads[i].msgs[j].ts);
@@ -108,6 +111,13 @@ void notif_store_init(void)
         nvs_get_i32(h, key, &mc);
         if (mc > NS_MAX_MSG_PER_THREAD) mc = NS_MAX_MSG_PER_THREAD;
         s_threads[i].count = (int)mc;
+
+        int32_t ur = 0;
+        key_thread(key, i, "u");
+        nvs_get_i32(h, key, &ur);
+        if (ur < 0) ur = 0;
+        if (ur > mc) ur = mc;
+        s_threads[i].unread = (int)ur;
 
         for (int j = 0; j < s_threads[i].count; j++) {
             sz = NS_TS_LEN;
@@ -180,7 +190,11 @@ void notif_store_add(const char *cat, const char *sender,
     strncpy(t->cat, cat, NS_CAT_LEN - 1);
     t->cat[NS_CAT_LEN - 1] = '\0';
 
-    ESP_LOGI(TAG, "Added msg to '%s' (thread %d, %d msgs)", t->sender, found, t->count);
+    /* Count as unread */
+    if (t->unread < t->count) t->unread++;
+
+    ESP_LOGI(TAG, "Added msg to '%s' (thread %d, %d msgs, %d unread)",
+             t->sender, found, t->count, t->unread);
     save_all();
 }
 
@@ -193,4 +207,20 @@ const ns_thread_t *notif_store_get(int idx)
 {
     if (idx < 0 || idx >= s_count) return NULL;
     return &s_threads[idx];
+}
+
+void notif_store_mark_read(int idx)
+{
+    if (idx < 0 || idx >= s_count) return;
+    if (s_threads[idx].unread == 0) return;
+    s_threads[idx].unread = 0;
+    save_all();
+}
+
+int notif_store_total_unread(void)
+{
+    int total = 0;
+    for (int i = 0; i < s_count; i++)
+        total += s_threads[i].unread;
+    return total;
 }

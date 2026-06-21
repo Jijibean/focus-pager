@@ -153,8 +153,9 @@ static lv_obj_t *s_scr_thread_detail = NULL;
 static lv_obj_t *s_lbl_status     = NULL;   /* status bar */
 static lv_obj_t *s_lbl_clock      = NULL;   /* "10:34 AM" in right col */
 static lv_obj_t *s_lbl_clock_date = NULL;   /* "Sat Jun 21" below clock */
-static lv_obj_t *s_lbl_hint       = NULL;   /* pulsing scroll hint */
-static bool      s_hint_on        = false;  /* current pulse state */
+static lv_obj_t *s_lbl_hint         = NULL;   /* pulsing scroll hint */
+static lv_obj_t *s_lbl_unread_badge = NULL;   /* top-right unread dot + count */
+static bool      s_hint_on          = false;  /* current pulse state */
 
 /* Todo list — up to MAX_TODOS items in left column */
 #define MAX_TODOS     5
@@ -163,14 +164,15 @@ typedef struct { bool active; bool checked; char text[TODO_TEXT_LEN + 1]; } todo
 static todo_item_t  s_todos[MAX_TODOS];
 static lv_obj_t    *s_lbl_todos[MAX_TODOS];
 
-/* Notification detail screen — two scrollable half-cards */
-static lv_obj_t *s_detail_status    = NULL;   /* status bar left  */
+/* Notification detail screen — two half-cards stacked */
+static lv_obj_t *s_detail_status    = NULL;
 static lv_obj_t *s_detail_pager     = NULL;   /* "2/5" top-right  */
 static lv_obj_t *s_card[2]          = {NULL, NULL};
 static lv_obj_t *s_card_icon[2]     = {NULL, NULL};
 static lv_obj_t *s_card_title[2]    = {NULL, NULL};
 static lv_obj_t *s_card_ts[2]       = {NULL, NULL};
 static lv_obj_t *s_card_body[2]     = {NULL, NULL};
+static lv_obj_t *s_card_unread[2]   = {NULL, NULL};  /* unread count badge */
 
 /* Thread detail screen */
 static lv_obj_t *s_td_status  = NULL;  /* status bar */
@@ -297,6 +299,22 @@ static void redraw_todos(void)
 /* Forward declaration */
 static const char *category_icon(const char *cat);
 
+/* Refresh the top-right unread badge on the idle screen.
+ * Safe to call from any screen — updates will render when idle screen shows. */
+static void redraw_unread_badge(void)
+{
+    if (!s_lbl_unread_badge) return;
+    int n = notif_store_total_unread();
+    if (n > 0) {
+        char buf[20];
+        snprintf(buf, sizeof(buf), LV_SYMBOL_BULLET " %d", n);
+        lv_label_set_text(s_lbl_unread_badge, buf);
+        lv_obj_remove_flag(s_lbl_unread_badge, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_lbl_unread_badge, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static void capture_timestamp(char *buf, size_t sz)
 {
     if (!s_time.valid) { buf[0] = '\0'; return; }
@@ -390,6 +408,12 @@ static void build_idle_screen(void)
     s_lbl_status = make_label(s_scr_idle,
         &lv_font_montserrat_12, C_GRAY,
         LV_ALIGN_TOP_LEFT, H_PAD, 4, "");
+
+    /* Unread notification badge — top-right, accent dot + count */
+    s_lbl_unread_badge = make_label(s_scr_idle,
+        &lv_font_montserrat_12, C_ACCENT,
+        LV_ALIGN_TOP_RIGHT, -H_PAD, 4, "");
+    lv_obj_add_flag(s_lbl_unread_badge, LV_OBJ_FLAG_HIDDEN);
 
     /* ── Vertical divider between columns ── */
     lv_obj_t *vdiv = lv_obj_create(s_scr_idle);
@@ -488,6 +512,15 @@ static void build_half_card(int ci, int y)
                     DETAIL_CARD_H - DETAIL_PAD * 2 - 22);
     lv_label_set_long_mode(s_card_body[ci], LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_card_body[ci], "");
+
+    /* Unread count badge — bottom-right corner of card */
+    s_card_unread[ci] = lv_label_create(s_card[ci]);
+    lv_obj_set_style_text_font(s_card_unread[ci], &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(s_card_unread[ci], C_ACCENT, 0);
+    lv_obj_set_style_bg_opa(s_card_unread[ci], LV_OPA_TRANSP, 0);
+    lv_obj_align(s_card_unread[ci], LV_ALIGN_BOTTOM_RIGHT, -DETAIL_PAD, -DETAIL_PAD + 2);
+    lv_label_set_text(s_card_unread[ci], "");
+    lv_obj_add_flag(s_card_unread[ci], LV_OBJ_FLAG_HIDDEN);
 }
 
 static void build_notif_detail_screen(void)
@@ -622,16 +655,28 @@ static void populate_card(int ci, const ns_thread_t *t, bool highlighted)
     lv_label_set_text(s_card_body[ci],
                       (t->count > 0 && t->msgs[0].text[0])
                       ? t->msgs[0].text : " ");
+
+    /* Unread badge */
+    if (t->unread > 0) {
+        char ubuf[12];
+        snprintf(ubuf, sizeof(ubuf), "%d", t->unread);
+        lv_label_set_text(s_card_unread[ci], ubuf);
+        lv_obj_remove_flag(s_card_unread[ci], LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_card_unread[ci], LV_OBJ_FLAG_HIDDEN);
+    }
+
     lv_obj_remove_flag(s_card[ci], LV_OBJ_FLAG_HIDDEN);
 }
 
 /* Load the thread-list detail screen for the given 1-based page.
  *
- * Newest thread anchors at the bottom, like a chat view.
- * Scrolling up goes to older threads:
+ * Newest thread always at the top (highlighted); the next older thread
+ * is shown below it (dimmed) for context:
  *
- *   page == 1  →  top = thread[1] (dimmed),         bottom = thread[0] (highlighted)
- *   page >= 2  →  top = thread[page-1] (highlighted), bottom = thread[page-2] (dimmed)
+ *   page 1  →  top = thread[0] (highlighted), bottom = thread[1] (dimmed)
+ *   page 2  →  top = thread[1] (highlighted), bottom = thread[2] (dimmed)
+ *   page N  →  top = thread[N-1] (highlighted), bottom hidden if no thread[N]
  *
  * card[0] = top half, card[1] = bottom half.
  * Call inside lvgl_port_lock. */
@@ -644,29 +689,21 @@ static void load_notif_detail_locked(int page)
     snprintf(pager_buf, sizeof(pager_buf), "%d/%d", page, total);
     lv_label_set_text(s_detail_pager, pager_buf);
 
-    if (page == 1) {
-        /* Newest thread at bottom, highlighted */
-        const ns_thread_t *t0 = notif_store_get(0);
-        if (t0) populate_card(1, t0, true);
-        const ns_thread_t *t1 = notif_store_get(1);
-        if (t1) {
-            populate_card(0, t1, false);
-        } else {
-            lv_obj_add_flag(s_card[0], LV_OBJ_FLAG_HIDDEN);
-        }
-    } else {
-        /* Older thread at top (highlighted), newer below (dimmed) */
-        const ns_thread_t *th = notif_store_get(page - 1);
-        const ns_thread_t *tl = notif_store_get(page - 2);
-        if (th) populate_card(0, th, true);
-        if (tl) populate_card(1, tl, false);
-    }
+    /* Always hide both cards first, then show what exists */
+    lv_obj_add_flag(s_card[0], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_card[1], LV_OBJ_FLAG_HIDDEN);
+
+    const ns_thread_t *top  = notif_store_get(page - 1);  /* highlighted */
+    const ns_thread_t *next = notif_store_get(page);       /* dimmed below */
+
+    if (top)  populate_card(0, top,  true);
+    if (next) populate_card(1, next, false);
 
     lv_screen_load(s_scr_notif_detail);
 }
 
 /* Load thread detail screen for thread at idx.
- * Shows full message history (newest first).
+ * Shows full message history (newest first), then marks thread as read.
  * Call inside lvgl_port_lock. */
 static void load_thread_detail_locked(int idx)
 {
@@ -693,6 +730,10 @@ static void load_thread_detail_locked(int idx)
     }
     lv_label_set_text(s_td_content, buf);
 
+    /* Mark this thread as read and refresh the badge on the idle screen */
+    notif_store_mark_read(idx);
+    redraw_unread_badge();
+
     lv_screen_load(s_scr_thread_detail);
 }
 
@@ -700,20 +741,24 @@ static void load_thread_detail_locked(int idx)
    Timers
    ════════════════════════════════════════════════════════════════════════════ */
 
-/* 500ms pulse: show/hide the scroll hint when on idle with notifications */
+/* 500ms pulse: show/hide the scroll hint and keep the unread badge current */
 static void hint_tick_cb(void *arg)
 {
-    if (!s_lbl_hint) return;
     if (!lvgl_port_lock(0)) return;
     if (s_screen == SCREEN_IDLE && notif_store_count() > 0) {
-        s_hint_on = !s_hint_on;
-        if (s_hint_on)
-            lv_obj_remove_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
-        else
+        if (s_lbl_hint) {
+            s_hint_on = !s_hint_on;
+            if (s_hint_on)
+                lv_obj_remove_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+            else
+                lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+        }
+        redraw_unread_badge();
+    } else {
+        if (s_lbl_hint) {
+            s_hint_on = false;
             lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
-    } else if (s_lbl_hint) {
-        s_hint_on = false;
-        lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+        }
     }
     lvgl_port_unlock();
 }
@@ -914,11 +959,12 @@ void ui_show_notification(const char *category, const char *title, const char *m
 
     notif_store_add(category ? category : "", san_sender, san_msg, ts);
 
-    /* Return to home — notification is reachable via scroll */
+    /* Return to home — notification reachable via scroll; refresh badge */
     if (!lvgl_port_lock(0)) return;
     s_screen       = SCREEN_IDLE;
     s_current_page = 0;
     update_status_label(s_lbl_status);
+    redraw_unread_badge();
     lv_screen_load(s_scr_idle);
     lvgl_port_unlock();
 }
@@ -1043,8 +1089,8 @@ bool ui_has_unread(void)
 void ui_encoder_click(void)
 {
     if (s_screen == SCREEN_NOTIF_DETAIL) {
-        /* Drill into thread detail for the highlighted card */
-        int thread_idx = (s_current_page == 1) ? 0 : (s_current_page - 1);
+        /* Drill into thread detail — highlighted card is always thread[page-1] */
+        int thread_idx = s_current_page - 1;
         if (!lvgl_port_lock(0)) return;
         s_screen = SCREEN_THREAD_DETAIL;
         load_thread_detail_locked(thread_idx);

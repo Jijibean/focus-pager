@@ -25,6 +25,7 @@ typedef struct {
     char     sender[NS_SENDER_LEN];
     char     cat[NS_CAT_LEN];
     int      count;                          /* number of messages stored  */
+    int      unread;                         /* messages not yet viewed    */
     ns_msg_t msgs[NS_MAX_MSG_PER_THREAD];   /* msgs[0] = newest           */
 } ns_thread_t;
 
@@ -47,3 +48,9 @@ int notif_store_count(void);
 
 /** Return thread at idx (0 = most recently active).  NULL if out of range. */
 const ns_thread_t *notif_store_get(int idx);
+
+/** Mark all messages in thread idx as read (unread → 0).  Persists to NVS. */
+void notif_store_mark_read(int idx);
+
+/** Sum of unread counts across all threads. */
+int notif_store_total_unread(void);

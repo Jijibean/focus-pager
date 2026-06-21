@@ -29,17 +29,15 @@
 #define LED_GPIO GPIO_NUM_13   /* moved off GPIO2; GPIO2 is now LCD RST */
 
 /* ── LED blink task ──────────────────────────────────────────────────────── */
-/* Fast blink (60ms) when there are unread notifications, slow (600ms) when idle. */
 static void led_task(void *arg)
 {
     gpio_reset_pin(LED_GPIO);
     gpio_set_direction(LED_GPIO, GPIO_MODE_OUTPUT);
     while (1) {
-        int period = ui_has_unread() ? 60 : 600;
         gpio_set_level(LED_GPIO, 1);
-        vTaskDelay(pdMS_TO_TICKS(period));
+        vTaskDelay(pdMS_TO_TICKS(200));
         gpio_set_level(LED_GPIO, 0);
-        vTaskDelay(pdMS_TO_TICKS(period));
+        vTaskDelay(pdMS_TO_TICKS(200));
     }
 }
 
