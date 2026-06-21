@@ -92,7 +92,15 @@ static lv_obj_t *s_scr_bricked = NULL;
 static lv_obj_t *s_scr_call    = NULL;   /* shared for incoming + active */
 
 /* Main screen labels */
-static lv_obj_t *s_lbl_status = NULL;   /* status bar: time + BT state */
+static lv_obj_t *s_lbl_status = NULL;   /* status bar: BT + time             */
+static lv_obj_t *s_lbl_clock  = NULL;   /* large clock "10:34 AM"             */
+
+/* To-do list — max 3 items shown below the clock */
+#define MAX_TODOS     3
+#define TODO_TEXT_LEN 47
+typedef struct { bool active; bool checked; char text[TODO_TEXT_LEN + 1]; } todo_item_t;
+static todo_item_t  s_todos[MAX_TODOS];
+static lv_obj_t    *s_lbl_todos[MAX_TODOS];
 
 /* Notification history — newest at index 0 */
 #define MAX_NOTIFS    5
@@ -111,13 +119,29 @@ typedef struct {
 static notif_item_t s_notif_hist[MAX_NOTIFS];
 static int          s_notif_count = 0;
 
-/* Notification screen: fixed status bar + scrollable card list */
-#define STATUS_H  22   /* height of the fixed status bar strip */
-#define CARD_H    70   /* height of each notification card    */
-#define CARD_PX   10   /* horizontal padding inside a card    */
-#define CARD_PY    6   /* vertical padding inside a card      */
+/*
+ * Idle screen layout (320×240 landscape):
+ *
+ *  y=  0  ┌─ status bar (BT state, 12pt) ───────────────┐  h=20
+ *  y= 20  ├─ clock "10:34 AM" (32pt white) ─────────────┤  h=44
+ *  y= 64  │  todo 1  ─ 2  ─ 3  (14pt, 18px each) ───────│  h=54
+ *  y=118  ├─ thin divider ──────────────────────────────── h= 2
+ *  y=120  ├─ notification card 0 (newest) ───────────────┤  h=60
+ *  y=180  └─ notification card 1 ───────────────────────── h=60
+ *  y=240
+ */
+#define STATUS_H    20
+#define CLOCK_Y     22
+#define TODO_Y      66
+#define TODO_LINE_H 18
+#define DIVIDER_Y   120   /* = TODO_Y + MAX_TODOS*TODO_LINE_H + 0 */
+#define NOTIF_Y     122   /* divider + 2px gap */
+#define CARDS_SHOWN  2    /* only show 2 most-recent cards */
+#define CARD_H      59    /* (240 - NOTIF_Y) / CARDS_SHOWN = 118/2 */
+#define CARD_PX     10
+#define CARD_PY      5
 
-static lv_obj_t *s_notif_list = NULL;   /* scrollable container inside s_scr_idle */
+static lv_obj_t *s_notif_list = NULL;   /* fixed-size container inside s_scr_idle */
 
 /* Call screen labels */
 static lv_obj_t *s_call_icon   = NULL;  /* LV_SYMBOL_CALL, colored */
@@ -188,6 +212,42 @@ static void update_status_label(lv_obj_t *lbl)
     lv_label_set_text(lbl, buf);
 }
 
+/* Update the large clock label to current s_time — call inside lvgl_port_lock */
+static void redraw_clock(void)
+{
+    if (!s_lbl_clock) return;
+    char buf[16];
+    if (s_time.valid) {
+        int h = s_time.hour % 12;
+        if (h == 0) h = 12;
+        snprintf(buf, sizeof(buf), "%d:%02d %s",
+                 h, s_time.min, s_time.hour < 12 ? "AM" : "PM");
+    } else {
+        snprintf(buf, sizeof(buf), "--:--");
+    }
+    lv_label_set_text(s_lbl_clock, buf);
+}
+
+/* Redraw all todo rows from s_todos — call inside lvgl_port_lock */
+static void redraw_todos(void)
+{
+    for (int i = 0; i < MAX_TODOS; i++) {
+        if (!s_lbl_todos[i]) continue;
+        if (s_todos[i].active) {
+            char line[TODO_TEXT_LEN + 8];
+            snprintf(line, sizeof(line), "%s %s",
+                     s_todos[i].checked ? LV_SYMBOL_OK : LV_SYMBOL_BULLET,
+                     s_todos[i].text);
+            lv_label_set_text(s_lbl_todos[i], line);
+            lv_obj_set_style_text_color(s_lbl_todos[i],
+                s_todos[i].checked ? C_DIM : C_GRAY, 0);
+            lv_obj_remove_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
 /* Forward declaration — category_icon is defined after the helpers */
 static const char *category_icon(const char *cat);
 
@@ -201,7 +261,11 @@ static void capture_timestamp(char *buf, size_t sz)
              h, s_time.min, s_time.hour < 12 ? "AM" : "PM");
 }
 
-/* Build one notification card inside the scrollable list container */
+/* Build one notification card inside the list container.
+ * Layout within CARD_H=59px:
+ *   y=CARD_PY(5)  [icon] Sender Name           timestamp
+ *   y=23          Message body up to 2 lines, truncated with ...
+ */
 static void add_notif_card(lv_obj_t *parent, const notif_item_t *n, int y)
 {
     lv_obj_t *card = lv_obj_create(parent);
@@ -215,7 +279,7 @@ static void add_notif_card(lv_obj_t *parent, const notif_item_t *n, int y)
     lv_obj_set_style_border_color(card, C_DIM, 0);
     lv_obj_clear_flag(card, LV_OBJ_FLAG_SCROLLABLE);
 
-    /* Row 1 — icon (14pt, accent) */
+    /* Row 1 left: icon (14pt accent) */
     lv_obj_t *icon = lv_label_create(card);
     lv_obj_set_style_text_font(icon, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(icon, C_ACCENT, 0);
@@ -223,46 +287,40 @@ static void add_notif_card(lv_obj_t *parent, const notif_item_t *n, int y)
     lv_obj_set_pos(icon, CARD_PX, CARD_PY);
     lv_label_set_text(icon, category_icon(n->cat));
 
-    /* Row 1 — category name (12pt, gray) */
-    lv_obj_t *cat_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(cat_lbl, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(cat_lbl, C_GRAY, 0);
-    lv_obj_set_style_bg_opa(cat_lbl, LV_OPA_TRANSP, 0);
-    lv_obj_set_pos(cat_lbl, CARD_PX + 20, CARD_PY + 1);
-    lv_label_set_text(cat_lbl, n->cat);
+    /* Row 1 left: sender name (12pt white) — right of icon, clips if too long */
+    lv_obj_t *name_lbl = lv_label_create(card);
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_12, 0);
+    lv_obj_set_style_text_color(name_lbl, C_WHITE, 0);
+    lv_obj_set_style_bg_opa(name_lbl, LV_OPA_TRANSP, 0);
+    lv_obj_set_pos(name_lbl, CARD_PX + 18, CARD_PY + 1);
+    /* Leave 60px on the right for the timestamp */
+    lv_obj_set_width(name_lbl, LCD_W - CARD_PX * 2 - 18 - 62);
+    lv_label_set_long_mode(name_lbl, LV_LABEL_LONG_CLIP);
+    lv_label_set_text(name_lbl, n->title[0] ? n->title : n->cat);
 
-    /* Row 1 — timestamp (12pt, dim, right-aligned) */
+    /* Row 1 right: timestamp (12pt dim) */
     if (n->timestamp[0]) {
-        lv_obj_t *ts_lbl = lv_label_create(card);
-        lv_obj_set_style_text_font(ts_lbl, &lv_font_montserrat_12, 0);
-        lv_obj_set_style_text_color(ts_lbl, C_DIM, 0);
-        lv_obj_set_style_bg_opa(ts_lbl, LV_OPA_TRANSP, 0);
-        lv_obj_align(ts_lbl, LV_ALIGN_TOP_RIGHT, -CARD_PX, CARD_PY);
-        lv_label_set_text(ts_lbl, n->timestamp);
+        lv_obj_t *ts = lv_label_create(card);
+        lv_obj_set_style_text_font(ts, &lv_font_montserrat_12, 0);
+        lv_obj_set_style_text_color(ts, C_DIM, 0);
+        lv_obj_set_style_bg_opa(ts, LV_OPA_TRANSP, 0);
+        lv_obj_align(ts, LV_ALIGN_TOP_RIGHT, -CARD_PX, CARD_PY);
+        lv_label_set_text(ts, n->timestamp);
     }
 
-    /* Row 2 — title (16pt, white) */
-    lv_obj_t *title_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(title_lbl, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(title_lbl, C_WHITE, 0);
-    lv_obj_set_style_bg_opa(title_lbl, LV_OPA_TRANSP, 0);
-    lv_obj_set_pos(title_lbl, CARD_PX, CARD_PY + 22);
-    lv_obj_set_width(title_lbl, LCD_W - CARD_PX * 2);
-    lv_label_set_long_mode(title_lbl, LV_LABEL_LONG_CLIP);
-    lv_label_set_text(title_lbl, n->title);
-
-    /* Row 3 — message preview (12pt, gray, 1 line clipped) */
-    lv_obj_t *body_lbl = lv_label_create(card);
-    lv_obj_set_style_text_font(body_lbl, &lv_font_montserrat_12, 0);
-    lv_obj_set_style_text_color(body_lbl, C_GRAY, 0);
-    lv_obj_set_style_bg_opa(body_lbl, LV_OPA_TRANSP, 0);
-    lv_obj_set_pos(body_lbl, CARD_PX, CARD_PY + 46);
-    lv_obj_set_width(body_lbl, LCD_W - CARD_PX * 2);
-    lv_label_set_long_mode(body_lbl, LV_LABEL_LONG_CLIP);
-    lv_label_set_text(body_lbl, n->message);
+    /* Row 2-3: message body (14pt gray, max 2 lines, trailing ...) */
+    lv_obj_t *body = lv_label_create(card);
+    lv_obj_set_style_text_font(body, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(body, C_GRAY, 0);
+    lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
+    lv_obj_set_pos(body, CARD_PX, CARD_PY + 18);
+    lv_obj_set_size(body, LCD_W - CARD_PX * 2, 36); /* 2 × ~18px lines */
+    lv_label_set_long_mode(body, LV_LABEL_LONG_DOT);
+    lv_label_set_text(body, n->message[0] ? n->message : " ");
 }
 
-/* Wipe all cards and rebuild from s_notif_hist — call inside lvgl_port_lock */
+/* Wipe all cards and rebuild from s_notif_hist — call inside lvgl_port_lock.
+ * Only the CARDS_SHOWN most-recent notifications are rendered. */
 static void rebuild_notif_list(void)
 {
     if (!s_notif_list) return;
@@ -272,14 +330,16 @@ static void rebuild_notif_list(void)
         lv_obj_set_style_text_font(empty, &lv_font_montserrat_14, 0);
         lv_obj_set_style_text_color(empty, C_DIM, 0);
         lv_obj_set_style_bg_opa(empty, LV_OPA_TRANSP, 0);
-        lv_obj_align(empty, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_set_pos(empty, 0, 16);
+        lv_obj_set_width(empty, LCD_W);
+        lv_obj_set_style_text_align(empty, LV_TEXT_ALIGN_CENTER, 0);
         lv_label_set_text(empty, "No messages");
         return;
     }
-    for (int i = 0; i < s_notif_count; i++) {
+    int n_show = s_notif_count < CARDS_SHOWN ? s_notif_count : CARDS_SHOWN;
+    for (int i = 0; i < n_show; i++) {
         add_notif_card(s_notif_list, &s_notif_hist[i], i * CARD_H);
     }
-    lv_obj_scroll_to_y(s_notif_list, 0, LV_ANIM_OFF);  /* newest card on top */
 }
 
 /* Return the appropriate LVGL symbol for an ANCS category string */
@@ -332,20 +392,46 @@ static void build_idle_screen(void)
     s_scr_idle = lv_obj_create(NULL);
     style_screen(s_scr_idle);
 
-    /* Status bar — top: time + BT state */
+    /* ── Status bar (BT + time, top-left, 12pt gray) ── */
     s_lbl_status = make_label(s_scr_idle,
         &lv_font_montserrat_12, C_GRAY,
-        LV_ALIGN_TOP_LEFT, 10, 5, "");
+        LV_ALIGN_TOP_LEFT, CARD_PX, 4, "");
 
-    /* Scrollable notification list — fills area below status bar */
+    /* ── Clock "10:34 AM" (32pt white) ── */
+    s_lbl_clock = make_label(s_scr_idle,
+        &lv_font_montserrat_32, C_WHITE,
+        LV_ALIGN_TOP_LEFT, CARD_PX, CLOCK_Y, "--:--");
+
+    /* ── Todo rows (14pt, hidden until populated) ── */
+    for (int i = 0; i < MAX_TODOS; i++) {
+        s_lbl_todos[i] = make_label(s_scr_idle,
+            &lv_font_montserrat_14, C_GRAY,
+            LV_ALIGN_TOP_LEFT, CARD_PX, TODO_Y + i * TODO_LINE_H, "");
+        lv_label_set_long_mode(s_lbl_todos[i], LV_LABEL_LONG_CLIP);
+        lv_obj_set_width(s_lbl_todos[i], LCD_W - CARD_PX * 2);
+        lv_obj_add_flag(s_lbl_todos[i], LV_OBJ_FLAG_HIDDEN);
+    }
+
+    /* ── Thin divider line between header and notification cards ── */
+    lv_obj_t *div = lv_obj_create(s_scr_idle);
+    lv_obj_set_pos(div, 0, DIVIDER_Y);
+    lv_obj_set_size(div, LCD_W, 1);
+    lv_obj_set_style_bg_color(div, C_DIM, 0);
+    lv_obj_set_style_bg_opa(div, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(div, 0, 0);
+    lv_obj_set_style_pad_all(div, 0, 0);
+    lv_obj_clear_flag(div, LV_OBJ_FLAG_SCROLLABLE);
+
+    /* ── Notification card area (fixed 2-card height, no scroll) ── */
     s_notif_list = lv_obj_create(s_scr_idle);
-    lv_obj_set_pos(s_notif_list, 0, STATUS_H);
-    lv_obj_set_size(s_notif_list, LCD_W, LCD_H - STATUS_H);
+    lv_obj_set_pos(s_notif_list, 0, NOTIF_Y);
+    lv_obj_set_size(s_notif_list, LCD_W, LCD_H - NOTIF_Y);
     lv_obj_set_style_bg_opa(s_notif_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_notif_list, 0, 0);
     lv_obj_set_style_pad_all(s_notif_list, 0, 0);
     lv_obj_set_style_radius(s_notif_list, 0, 0);
     lv_obj_set_scrollbar_mode(s_notif_list, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(s_notif_list, LV_OBJ_FLAG_SCROLLABLE);
 
     rebuild_notif_list();
 }
@@ -425,9 +511,10 @@ static void clock_tick_cb(void *arg)
         }
     }
 
-    /* Update status bar once per minute */
+    /* Redraw clock + status bar once per minute */
     if (s_time.sec != 0) return;
     if (!lvgl_port_lock(0)) return;
+    redraw_clock();
     update_status_label(s_lbl_status);
     lvgl_port_unlock();
 }
@@ -675,16 +762,26 @@ void ui_set_time(uint8_t hour, uint8_t min, uint8_t sec,
              day, year);
 
     if (!lvgl_port_lock(0)) return;
+    redraw_clock();
     update_status_label(s_lbl_status);
     lvgl_port_unlock();
 }
 
 void ui_set_todo(uint8_t index, bool checked, const char *text)
 {
-    (void)index; (void)checked; (void)text;
+    if (index >= MAX_TODOS) return;
+    s_todos[index].active  = true;
+    s_todos[index].checked = checked;
+    strncpy(s_todos[index].text, text, TODO_TEXT_LEN);
+    s_todos[index].text[TODO_TEXT_LEN] = '\0';
+    if (lvgl_port_lock(0)) { redraw_todos(); lvgl_port_unlock(); }
 }
 
-void ui_clear_todos(void) {}
+void ui_clear_todos(void)
+{
+    memset(s_todos, 0, sizeof(s_todos));
+    if (lvgl_port_lock(0)) { redraw_todos(); lvgl_port_unlock(); }
+}
 
 void ui_set_message(const char *text) { (void)text; }
 
