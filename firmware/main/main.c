@@ -68,18 +68,16 @@ static void on_encoder_rotate(int delta)
 
 static void on_encoder_click(void)
 {
-    /* Context-aware click: drill into thread detail, back out, or go home. */
-    ui_encoder_click();
+    /* Answer/hang up when a call screen is active; otherwise navigate. */
+    if (ui_screen_is_call()) {
+        ESP_LOGI(TAG, "Encoder click → hfp_client_button_press");
+        hfp_client_button_press();
+    } else {
+        ui_encoder_click();
+    }
 }
 
 /* ── Button callbacks ────────────────────────────────────────────────────── */
-
-/* Short press: answer incoming call or hang up active call */
-static void on_short_press(void)
-{
-    ESP_LOGI(TAG, "Short press → hfp_client_button_press");
-    hfp_client_button_press();
-}
 
 /* Long press (≥2s): fire unbrick event */
 static void on_unbrick_event(void)
@@ -135,9 +133,8 @@ void app_main(void)
     /* Rotary encoder (CLK=GPIO32, DT=GPIO33, SW=GPIO34) */
     encoder_init(on_encoder_rotate, on_encoder_click);
 
-    /* Button + brick state machine */
+    /* Button + brick state machine (GPIO27 long-press = unbrick) */
     pager_state_init(on_unbrick_event);
-    pager_state_set_shortpress_cb(on_short_press);
 
     ESP_LOGI(TAG, "Focus Pager Phase 4 running");
     ui_set_status_ble("Adv");

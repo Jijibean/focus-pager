@@ -1086,6 +1086,11 @@ bool ui_has_unread(void)
     return notif_store_count() > 0;
 }
 
+bool ui_screen_is_call(void)
+{
+    return s_screen == SCREEN_INCOMING_CALL || s_screen == SCREEN_CALL_ACTIVE;
+}
+
 void ui_encoder_click(void)
 {
     if (s_screen == SCREEN_NOTIF_DETAIL) {

@@ -100,6 +100,11 @@ void ui_encoder_click(void);
 
 /**
  * Returns true when the notification thread store has at least one entry.
- * Used by the LED task to signal unread state.
  */
 bool ui_has_unread(void);
+
+/**
+ * Returns true when an incoming or active call screen is showing.
+ * Used by the encoder click handler to route to hfp_client_button_press().
+ */
+bool ui_screen_is_call(void);
